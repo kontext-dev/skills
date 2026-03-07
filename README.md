@@ -1,68 +1,21 @@
 # Kontext Skills
 
-Claude Code skills for Kontext.dev workflows.
+Skills for Kontext.dev workflows and SDK integration.
 
-## Installation
-
-Clone this repo into your Claude Code skills directory:
+## Install
 
 ```bash
-git clone https://github.com/kontext-dev/kontext-skills.git ~/.claude/skills
+npx skills add kontext-dev/skills
 ```
 
-Or if you already have a skills directory, clone and copy:
+Auto-detects your AI harness (Claude Code, Cursor, Gemini CLI, etc.) and installs to the right location.
 
-```bash
-git clone https://github.com/kontext-dev/kontext-skills.git /tmp/kontext-skills
-cp -r /tmp/kontext-skills/* ~/.claude/skills/
-```
+## Public Skills
 
-Skills are automatically detected by Claude Code on next conversation.
+### kontext-sdk
 
-## Available Skills
+Integrate the Kontext identity control plane into TypeScript applications using `@kontext-dev/js-sdk`.
 
-### brand-writer
+**Triggers on**: Imports of `@kontext-dev/js-sdk`, mentions of Kontext SDK, or requests to add identity/credential management to AI agent architectures.
 
-Write and refine content for Kontext.dev in the brand voice.
-
-**Triggers on**: Requests to write, edit, or improve website copy, blog posts, marketing emails, taglines, or CTAs.
-
-**Core message**: "From demo to deployment. For agents."
-
-**Usage**: Just ask Claude to write or improve Kontext content. The skill loads automatically.
-
----
-
-### kontext-mcp
-
-Explain how Skills, MCP, and Kontext work together as complementary layers.
-
-**Triggers on**: Questions about Skills vs MCP, agent architecture, or how Kontext fits with MCP servers.
-
-**Core narrative**: "Skills tell the agent what to do. MCP gives access to tools. Kontext makes sure those tools are safe to use in production."
-
-**Usage**: Ask about Skills vs MCP, agent governance, or how to make MCP calls production-ready.
-
----
-
-### data-deducer
-
-Analyze unfamiliar datasets to discover what's interesting, then write and execute code to explore and visualize findings.
-
-**Triggers on**: "analyze this data," "what's interesting in this dataset," "explore this dataset," or any request to discover patterns in data you haven't explored yet.
-
-**Accepts**: Any URL, HuggingFace dataset ID, or local file (CSV, Parquet, JSON, NDJSON, XLSX, TSV, or unknown formats).
-
-**Usage**: Point it at a dataset and it will profile the data, reason about what's interesting, write investigation code on the fly, and present the most surprising findings with visualizations.
-
----
-
-### use-graphite
-
-Manage stacked pull request workflows with the Graphite CLI (`gt`) in Graphite-enabled repositories.
-
-**Triggers on**: Requests involving stacked branch/PR workflows, Graphite branch creation, stack submission, syncing/restacking, or teammate stack collaboration.
-
-**Behavior**: Detects whether Graphite is enabled in the current repo first, then prefers `gt` commands (`gt create`, `gt modify`, `gt submit`, `gt sync`, `gt restack`, `gt get`) over ad-hoc `git push` and `gh pr create`.
-
-**Usage**: Ask to use `$use-graphite` when working in a Graphite-initialized repository.
+**Covers**: Server SDK (Express + MCP), Client SDK (auth flows), Vercel AI SDK adapter, React hooks, Cloudflare Agents, and Management API.
