@@ -39,10 +39,11 @@ Based on scan results, classify into one or more integration paths:
 
 Look for places where the app accesses external services. These are where Kontext replaces hardcoded credentials:
 
-- **Hardcoded API keys** → Replace with `kontext.require("integration-name", token)`
+- **Hardcoded API keys** → Replace with `kontext.require("github", token)`
 - **Environment variable tokens** (`process.env.GITHUB_TOKEN`) → Replace with scoped Kontext credentials
 - **OAuth flows built from scratch** → Replace with Kontext's managed OAuth
 - **Direct API calls** to GitHub, Slack, Linear, etc. → Wrap with Kontext credential exchange
+- **Server-to-server flows** where you already know the user ID → Use credential vault mode: `kontext.require("github", { userId: platformUserId })`
 
 ## Step 4: Present a Concrete Plan
 
@@ -66,6 +67,62 @@ Use this file to discover all available pages before exploring further.
 npm install @kontext-dev/js-sdk
 ```
 
+## Scoped Credentials
+
+### Token mode (standard MCP auth)
+
+Exchange a user's Bearer token for integration-scoped credentials:
+
+```typescript
+const cred = await kontext.require("github", authInfo!.token!);
+const res = await fetch("https://api.github.com/user/repos", {
+  headers: { Authorization: cred.authorization },
+});
+```
+
+### Credential Vault (userId mode)
+
+For server-to-server flows where you already know the user's platform ID — no Bearer token needed:
+
+```typescript
+const cred = await kontext.require("github", { userId: platformUserId });
+```
+
+- The `clientSecret` authenticates the request (no user Bearer token)
+- Blank/whitespace-only userIds are rejected with `TypeError`
+- `IntegrationConnectionRequiredError` will **NOT** include `connectUrl` (no user session to generate one)
+- Cache is mode-separated — token and userId calls never collide
+
+### `requireCredentials(integration, token)`
+
+For integrations using `connectType: "user_token"` (API keys rather than OAuth). Returns key-value credential pairs instead of a single access token:
+
+```typescript
+const resolved = await kontext.requireCredentials("custom-api", token);
+// resolved.credentials = { apiKey: "...", apiSecret: "..." }
+```
+
+Only accepts a raw token — does not support `{ userId }` mode.
+
+## Orchestrator
+
+`createKontextOrchestrator` is a hybrid client that combines gateway-routed tools with direct internal MCP connections. Used when `createKontextClient` is called without a `url` parameter:
+
+```typescript
+import { createKontextOrchestrator } from "@kontext-dev/js-sdk";
+
+const orchestrator = createKontextOrchestrator({
+  clientId: "your-app-client-id",
+  redirectUri: "http://localhost:3000/callback",
+  onAuthRequired: (url) => { window.location.href = url.toString(); },
+});
+
+await orchestrator.connect();
+const tools = await orchestrator.tools.list();
+```
+
+Same interface as `KontextClient`. Use when your app needs both Kontext-managed integrations and direct MCP server connections.
+
 ## Subpath Exports
 
 Use the narrowest import path for the integration:
@@ -76,12 +133,12 @@ Use the narrowest import path for the integration:
 | `@kontext-dev/js-sdk/client` | `createKontextClient` | Client SDK |
 | `@kontext-dev/js-sdk/server` | `Kontext` | Server SDK (Express + MCP) |
 | `@kontext-dev/js-sdk/ai` | `toKontextTools` | Vercel AI SDK adapter |
-| `@kontext-dev/js-sdk/react` | `useKontext`, `KontextProvider`, `useKontextContext` | React hooks |
+| `@kontext-dev/js-sdk/react` | `useKontext`, `KontextProvider`, `useKontextContext` | React hooks and auth state |
 | `@kontext-dev/js-sdk/react/cloudflare` | `useKontextAgent`, `useKontextContext` | React + Cloudflare Agents |
 | `@kontext-dev/js-sdk/cloudflare` | `withKontext`, `KontextCloudflareOAuthProvider`, `DurableObjectKontextStorage` | Cloudflare adapter |
 | `@kontext-dev/js-sdk/management` | `KontextManagementClient` | Management API |
 | `@kontext-dev/js-sdk/mcp` | `KontextMcp` | Low-level MCP client |
-| `@kontext-dev/js-sdk/errors` | `KontextError`, `isKontextError`, `isNetworkError`, `isUnauthorizedError` | Error handling |
+| `@kontext-dev/js-sdk/errors` | `isKontextError`, `AuthorizationRequiredError`, `OAuthError`, `IntegrationConnectionRequiredError`, `isNetworkError`, `isUnauthorizedError`, `translateError`, `ElicitationEntry` | Error handling |
 | `@kontext-dev/js-sdk/verify` | `KontextTokenVerifier` | Token verification |
 | `@kontext-dev/js-sdk/oauth` | OAuth utilities | OAuth helpers |
 
@@ -105,29 +162,43 @@ Install only what the integration path requires:
 | `KONTEXT_TOKEN_ISSUER` | Server SDK | Custom token issuer URL(s). Comma-separated for multiple. |
 | `KONTEXT_CLIENT_ID` | Cloudflare adapter | Application client ID. Auto-read by `withKontext`. |
 
-## Common Patterns
+## Error Handling
 
-### Error Handling
+### Error classes and utilities
+
+| Export | Type | Description |
+|--------|------|-------------|
+| `isKontextError` | Type guard | Check if error originates from Kontext SDK |
+| `AuthorizationRequiredError` | Error class | User needs to authenticate |
+| `OAuthError` | Error class | OAuth flow failure |
+| `IntegrationConnectionRequiredError` | Error class | User hasn't connected the integration — has `connectUrl` in token mode, **not** in userId mode |
+| `isNetworkError` | Detection function | CORS/fetch failures, unreachable API (handles Chrome/Firefox/Safari patterns) |
+| `isUnauthorizedError` | Detection function | Token expired or invalid |
+| `translateError` | Error translator | Unified error translation shared by client, orchestrator, and server — also classifies MCP JSON-RPC error codes (e.g., `-32600` → `kontext_mcp_invalid_request`) |
+| `ElicitationEntry` | Type | Elicitation flow entry |
+
+### Basic pattern
 
 ```typescript
-import { isKontextError, isNetworkError, isUnauthorizedError } from "@kontext-dev/js-sdk/errors";
+import { isKontextError, isNetworkError, isUnauthorizedError, translateError } from "@kontext-dev/js-sdk/errors";
 
 try {
   const cred = await kontext.require("github", token);
 } catch (err) {
-  if (isUnauthorizedError(err)) {
+  const translated = translateError(err);
+  if (isUnauthorizedError(translated)) {
     // Token expired or invalid - re-authenticate
-  } else if (isNetworkError(err)) {
+  } else if (isNetworkError(translated)) {
     // Kontext API unreachable - retry or fallback
-  } else if (isKontextError(err)) {
-    // Other Kontext error - check err.code
+  } else if (isKontextError(translated)) {
+    // Other Kontext error - check translated.code
   }
 }
 ```
 
 ### Integration Connection Required
 
-When a user hasn't connected an integration, the SDK throws `IntegrationConnectionRequiredError` with a `connectUrl`. Surface this URL to the user so they can authorize.
+When a user hasn't connected an integration, the SDK throws `IntegrationConnectionRequiredError` with a `connectUrl`. Surface this URL to the user so they can authorize:
 
 ```typescript
 import { IntegrationConnectionRequiredError } from "@kontext-dev/js-sdk/errors";
@@ -141,11 +212,13 @@ try {
 }
 ```
 
+**Important**: In userId mode (`kontext.require("github", { userId })`) the error will **not** include `connectUrl` since there's no user session. Handle this case separately — e.g., prompt the user to connect via your app's settings page.
+
 ## CRITICAL Rules
 
 - NEVER hardcode `clientSecret` in source code. Use `KONTEXT_CLIENT_SECRET` env var.
 - NEVER store access tokens in client-side code or localStorage without the SDK's storage abstraction.
-- ALWAYS use `kontext.require()` or `kontext.requireCredentials()` for scoped credentials instead of passing raw tokens.
+- ALWAYS use `kontext.require()` for OAuth integrations or `kontext.requireCredentials()` for API-key integrations. Never pass raw tokens.
 - ALWAYS install peer dependencies for the specific subpath export being used.
-- The `Kontext` server class auto-reads `KONTEXT_CLIENT_SECRET` from env - do not pass it in constructor unless overriding.
+- The `Kontext` server class auto-reads `KONTEXT_CLIENT_SECRET` from env — do not pass it in constructor unless overriding.
 - ALWAYS scan the codebase before recommending an integration path. Never ask the user to pick from a menu.

@@ -56,7 +56,10 @@ class Kontext {
   constructor(options: KontextOptions);
   destroy(): Promise<void>;
   middleware(server: McpServerOrFactory, options?: MiddlewareOptions): Router;
+  // Token mode (standard MCP auth — exchange user Bearer token)
   require(integration: IntegrationName, token: string): Promise<IntegrationCredential>;
+  // Credential vault mode (server-to-server — no user token needed)
+  require(integration: IntegrationName, options: { userId: string }): Promise<IntegrationCredential>;
   requireCredentials(integration: IntegrationName, token: string): Promise<IntegrationResolvedCredentials>;
 }
 ```
@@ -78,9 +81,9 @@ interface MiddlewareOptions {
 
 ## Scoped Credentials
 
-### `kontext.require(integration, token)`
+### Token mode: `kontext.require(integration, token)`
 
-Exchange a session token for integration-scoped credentials. Returns:
+Exchange a user's session token for integration-scoped credentials. Returns:
 
 ```typescript
 interface IntegrationCredential {
@@ -101,6 +104,23 @@ const res = await fetch(url, {
   headers: { Authorization: cred.authorization },
 });
 ```
+
+### Credential vault mode: `kontext.require(integration, { userId })`
+
+For server-to-server flows where you already know the user's platform ID — no Bearer token needed:
+
+```typescript
+const cred = await kontext.require("github", { userId: "platform-user-123" });
+const res = await fetch("https://api.github.com/user/repos", {
+  headers: { Authorization: cred.authorization },
+});
+```
+
+- Uses `subject_token_type = "urn:kontext:user-id"` for RFC 8693 token exchange
+- The `clientSecret` authenticates the request (no user Bearer token)
+- Blank/whitespace-only userIds are rejected with `TypeError`
+- `IntegrationConnectionRequiredError` will **not** include `connectUrl` (no user session)
+- Cache is mode-separated — token and userId calls never collide
 
 ### `kontext.requireCredentials(integration, token)`
 
