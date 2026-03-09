@@ -4,8 +4,33 @@ import crypto from "node:crypto";
 import { Buffer } from "node:buffer";
 import { parseArgs } from "node:util";
 
+const KNOWN_INTEGRATION_RECIPES = {
+  github: {
+    key: "github",
+    name: "github",
+    url: "https://api.githubcopilot.com/mcp/",
+    authMode: "oauth",
+    oauth: {
+      provider: "github",
+    },
+  },
+};
+
+function integrationPayloadFromRecipe(recipe) {
+  return {
+    name: recipe.name,
+    url: recipe.url,
+    authMode: recipe.authMode,
+    oauth: recipe.oauth,
+  };
+}
+
 function normalizeBaseUrl(value) {
   return value.replace(/\/api\/v1\/?$/, "").replace(/\/$/, "");
+}
+
+function normalizeUrl(value) {
+  return value.replace(/\/$/, "");
 }
 
 function parseJsonValue(name, raw, fallback) {
@@ -145,6 +170,164 @@ async function listAllApplications({ baseUrl, token }) {
   }
 }
 
+async function listAllIntegrations({ baseUrl, token }) {
+  const items = [];
+  let cursor;
+
+  while (true) {
+    const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+    const response = await apiRequest({
+      baseUrl,
+      token,
+      method: "GET",
+      path: `/integrations${query}`,
+    });
+
+    items.push(...(response.items ?? []));
+
+    if (!response.nextCursor) {
+      return items;
+    }
+
+    cursor = response.nextCursor;
+  }
+}
+
+async function ensureKnownIntegrations({
+  baseUrl,
+  token,
+  applicationId,
+  ensureKeys,
+}) {
+  if (ensureKeys.length === 0) {
+    return [];
+  }
+
+  const allIntegrations = await listAllIntegrations({ baseUrl, token });
+  const attached = await apiRequest({
+    baseUrl,
+    token,
+    method: "GET",
+    path: `/applications/${applicationId}/integrations`,
+  });
+  const attachedIds = new Set(attached.integrationIds ?? []);
+  const results = [];
+
+  for (const rawKey of ensureKeys) {
+    const key = rawKey.toLowerCase();
+    const recipe = KNOWN_INTEGRATION_RECIPES[key];
+    if (!recipe) {
+      throw new Error(
+        `Unsupported known integration "${rawKey}". Supported values: ${Object.keys(
+          KNOWN_INTEGRATION_RECIPES,
+        ).join(", ")}`,
+      );
+    }
+
+    const targetUrl = normalizeUrl(recipe.url);
+    let integration =
+      allIntegrations.find(
+        (item) =>
+          item.oauth?.provider?.toLowerCase() === recipe.oauth.provider &&
+          normalizeUrl(item.url) === targetUrl,
+      ) ??
+      allIntegrations.find((item) => item.name === recipe.name) ??
+      null;
+
+    let created = false;
+    let updated = false;
+
+    if (!integration) {
+      const createdResponse = await apiRequest({
+        baseUrl,
+        token,
+        method: "POST",
+        path: "/integrations",
+        body: integrationPayloadFromRecipe(recipe),
+      });
+      integration = createdResponse.integration;
+      allIntegrations.push(integration);
+      created = true;
+    } else {
+      const needsUpdate =
+        integration.name !== recipe.name ||
+        normalizeUrl(integration.url) !== targetUrl ||
+        integration.authMode !== recipe.authMode ||
+        integration.oauth?.provider?.toLowerCase() !== recipe.oauth.provider;
+
+      if (needsUpdate) {
+        const updatedResponse = await apiRequest({
+          baseUrl,
+          token,
+          method: "PATCH",
+          path: `/integrations/${integration.id}`,
+          body: integrationPayloadFromRecipe(recipe),
+        });
+        integration = updatedResponse.integration;
+        updated = true;
+      }
+    }
+
+    let refreshed = (
+      await apiRequest({
+        baseUrl,
+        token,
+        method: "GET",
+        path: `/integrations/${integration.id}`,
+      })
+    ).integration;
+
+    if (created || updated || !refreshed.oauth?.metadata) {
+      const validation = await apiRequest({
+        baseUrl,
+        token,
+        method: "POST",
+        path: `/integrations/${integration.id}/validate`,
+      });
+
+      if (validation.status !== "valid") {
+        throw new Error(
+          `Known integration "${recipe.name}" failed validation: ${validation.message ?? "unknown error"}`,
+        );
+      }
+
+      refreshed = (
+        await apiRequest({
+          baseUrl,
+          token,
+          method: "GET",
+          path: `/integrations/${integration.id}`,
+        })
+      ).integration;
+    }
+
+    if (!attachedIds.has(integration.id)) {
+      await apiRequest({
+        baseUrl,
+        token,
+        method: "POST",
+        path: `/applications/${applicationId}/integrations/${integration.id}`,
+      });
+      attachedIds.add(integration.id);
+    }
+
+    results.push({
+      key: recipe.key,
+      id: refreshed.id,
+      name: refreshed.name,
+      url: refreshed.url,
+      created,
+      updated,
+      attached: true,
+      provider: refreshed.oauth?.provider ?? null,
+      issuer: refreshed.oauth?.issuer ?? null,
+      validationStatus: refreshed.validationStatus ?? "unknown",
+    });
+  }
+
+  return results;
+}
+
 async function main() {
   const { values, positionals } = parseArgs({
     options: {
@@ -162,6 +345,7 @@ async function main() {
       "required-claims-json": { type: "string" },
       algorithm: { type: "string", multiple: true },
       "required-claim": { type: "string", multiple: true },
+      "ensure-integration": { type: "string", multiple: true },
       "max-token-age-seconds": { type: "string" },
       json: { type: "boolean", default: false },
     },
@@ -214,6 +398,7 @@ async function main() {
 
   const algorithmsFromArgs = values.algorithm ?? [];
   const requiredClaimsFromArgs = values["required-claim"] ?? [];
+  const ensureIntegrationsFromArgs = values["ensure-integration"] ?? [];
 
   const token = await requestToken({
     baseUrl,
@@ -329,6 +514,22 @@ async function main() {
     body: { externalAuth },
   });
 
+  const ensuredIntegrations =
+    ensureIntegrationsFromArgs.length > 0
+      ? ensureIntegrationsFromArgs
+      : parseStringArray(
+          "BYOA_ENSURE_KNOWN_INTEGRATIONS",
+          process.env.BYOA_ENSURE_KNOWN_INTEGRATIONS,
+          [],
+        );
+
+  const integrationResults = await ensureKnownIntegrations({
+    baseUrl,
+    token,
+    applicationId: application.id,
+    ensureKeys: ensuredIntegrations,
+  });
+
   const updated = (
     await apiRequest({
       baseUrl,
@@ -363,6 +564,7 @@ async function main() {
         updated.externalAuth?.partnerApiKeyConfigured ?? Boolean(partnerApiKey),
       generatedApiKey: partnerApiKey ?? null,
     },
+    integrations: integrationResults,
   };
 
   if (values.json) {
@@ -391,6 +593,21 @@ async function main() {
   console.log("");
   console.log("Use this next:");
   console.log("- Application ID is for POST /partner/connect-session");
+
+  if (result.integrations.length > 0) {
+    console.log("");
+    console.log("Attached integrations:");
+    for (const integration of result.integrations) {
+      const change = integration.created
+        ? "created"
+        : integration.updated
+          ? "updated"
+          : "reused";
+      console.log(
+        `- ${integration.name} (${change}, validation=${integration.validationStatus})`,
+      );
+    }
+  }
 
   if (result.byoa.generatedApiKey) {
     console.log("");

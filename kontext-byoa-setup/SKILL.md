@@ -12,6 +12,7 @@ This skill only covers **setup**:
 - verify it is confidential
 - configure JWT trust
 - create or rotate the BYOA API key
+- optionally create or hard-normalize known integrations and attach them to the app
 - return the values needed for hosted connect
 
 This skill does **not** cover:
@@ -58,12 +59,17 @@ Optional BYOA inputs:
 - `BYOA_ALLOWED_ALGORITHMS`
 - `BYOA_MAX_TOKEN_AGE_SECONDS`
 - `BYOA_ROTATE_API_KEY=true`
+- `BYOA_ENSURE_KNOWN_INTEGRATIONS`
 
 Safe defaults:
 - `BYOA_ALLOWED_ALGORITHMS=["RS256"]`
 - `BYOA_MAX_TOKEN_AGE_SECONDS=600`
 - `BYOA_REQUIRED_CLAIMS_JSON={}`
 - `BYOA_ALLOWED_RETURN_URLS=[]`
+- `BYOA_ENSURE_KNOWN_INTEGRATIONS=[]`
+
+Known integration support:
+- `github` — creates or reuses the canonical GitHub MCP integration, validates it, and attaches it to the application
 
 ## Secret handling rules
 
@@ -91,6 +97,7 @@ If the service account credentials are missing, stop and tell the user to create
    - `jwksUrl`
    - `audience`
    - optional advanced settings
+   - optional known integrations to ensure, for example `github`
 5. Run the bundled setup script:
 
 ```bash
@@ -124,6 +131,13 @@ BYOA_MAX_TOKEN_AGE_SECONDS=600 \
 node scripts/configure-byoa.mjs
 ```
 
+If you also want the skill to provision and attach the canonical GitHub integration:
+
+```bash
+BYOA_ENSURE_KNOWN_INTEGRATIONS='["github"]' \
+node scripts/configure-byoa.mjs
+```
+
 ## Notes for the agent
 
 - Use straightforward language.
@@ -131,6 +145,7 @@ node scripts/configure-byoa.mjs
 - Do not use “partner auth”, “partner connect”, or “external auth” in user-facing explanations.
 - Do not assume the exported management SDK types include `externalAuth` on `UpdateApplicationInput`.
 - The bundled script updates the application via the Management API directly for that reason.
+- When `BYOA_ENSURE_KNOWN_INTEGRATIONS` is set, the script uses the Management API to create or normalize the known integration, validates it, and attaches it to the target app.
 
 ## Success output
 
@@ -151,6 +166,9 @@ Bring your own auth:
 
 Use this next:
 - Application ID is for `POST /partner/connect-session`
+
+Attached integrations:
+- <only show this section when integrations were ensured>
 
 BYOA API key (save now):
 - <only show this if it was created or rotated in this run>

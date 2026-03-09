@@ -27,7 +27,7 @@ Configure Bring your own auth on a confidential Kontext application with a servi
 
 **Triggers on**: Requests to configure hosted connect for an app that already has its own login, set issuer/JWKS/audience for JWT trust, or create or rotate the BYOA API key.
 
-**Does**: Resolves the application, verifies it is confidential, configures JWT trust for `POST /partner/connect-session`, and returns the Application ID plus BYOA setup summary.
+**Does**: Resolves the application, verifies it is confidential, configures JWT trust for `POST /partner/connect-session`, optionally provisions known integrations like GitHub, and returns the Application ID plus BYOA setup summary.
 
 **Does not**: Retrieve credentials with the server SDK. That should stay a separate skill.
 
