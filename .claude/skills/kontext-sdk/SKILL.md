@@ -93,11 +93,6 @@ Use this decision rule:
 - there is already a connect flow for first-time onboarding, or
 - the app can implement partner connect bootstrap with JWT + JWKS
 
-## Documentation Index
-
-Fetch the documentation index at: https://docs.kontext.dev/llms.txt
-
-Use it to discover relevant pages before exploring further.
 
 ## Package
 
