@@ -42,6 +42,18 @@ Use this flow:
 
 Provider-specific configuration belongs in the command inputs, not in this skill. The skill should stay generic.
 
+## Execution Rules
+
+Follow these rules in order:
+
+1. Validate bootstrap inputs first.
+2. If `KONTEXT_SERVICE_ACCOUNT_CLIENT_ID` or `KONTEXT_SERVICE_ACCOUNT_CLIENT_SECRET` is missing, stop immediately and tell the user exactly which variable is missing.
+3. If `KONTEXT_OUTPUT_ENV_FILE` is missing, infer a conventional ignored local env target when the repo already clearly uses one, for example `apps/web/.env.local`, and pass it inline when running the helper.
+4. If the user names an existing integration such as `google-workspace`, treat that as **reuse and attach first**. Do not try to invent provider templates or broad management recipes unless the user explicitly asked for integration creation details.
+5. Run the bundled helper from the installed skill directly. Do not vendor or copy the helper into the target repo.
+6. Keep repo exploration narrow until bootstrap is done or blocked. Do not pivot into unrelated examples, demos, or legacy integrations just because they mention the same provider.
+7. After bootstrap succeeds, edit the target runtime surface and remove the hardcoded credential path.
+
 ## Required Inputs
 
 Service account:
@@ -94,31 +106,37 @@ Follow these rules strictly:
 ## Workflow
 
 1. Confirm the request really wants token mode and a public PKCE app.
-2. Find the hardcoded provider credential path in the app:
-   - `Bearer ...`
-   - `process.env.*TOKEN`
-   - `process.env.*KEY`
-   - literal provider access tokens
-3. Run the bundled setup helper:
+2. Validate the bootstrap inputs before scanning the repo:
+   - service account vars
+   - output env target
+   - application name or ID
+   - integration name or create/update inputs
+3. Run the bundled setup helper immediately. Do this before broad codebase exploration:
 
 ```bash
 node scripts/bootstrap-token-mode.mjs
 ```
 
-4. Read the output:
+4. If the helper is blocked, stop with the exact missing input. Do not continue with unrelated repo exploration.
+5. Find the hardcoded provider credential path in the specific target surface the user asked for:
+   - `Bearer ...`
+   - `process.env.*TOKEN`
+   - `process.env.*KEY`
+   - literal provider access tokens
+6. Read the output:
    - public app client ID
    - integration ID and name
    - whether the integration was created, updated, or reused
    - whether the env file was written
-5. Replace the hardcoded credential path with token mode:
+7. Replace the hardcoded credential path with token mode:
 
 ```ts
 const credential = await kontext.require(integrationName, token);
 ```
 
-6. If the runtime surface is an MCP server or backend route, keep the user token flowing into that server call.
-7. If runtime code can hit a first-time-connect case, handle `IntegrationConnectionRequiredError` and use `err.connectUrl`.
-8. Summarize the final setup and the exact runtime integration name.
+8. If the runtime surface is an MCP server or backend route, keep the user token flowing into that server call.
+9. If runtime code can hit a first-time-connect case, handle `IntegrationConnectionRequiredError` and use `err.connectUrl`.
+10. Summarize the final setup and the exact runtime integration name.
 
 ## Preferred Command Pattern
 
