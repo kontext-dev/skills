@@ -6,15 +6,24 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
-const VALID_AUTH_MODES = new Set(["oauth", "user_token", "server_token", "none"]);
+const VALID_PROVIDER_TYPES = new Set(["preset", "custom"]);
+const VALID_PROVIDER_PRESET_KEYS = new Set([
+  "figma",
+  "github",
+  "linear",
+  "notion",
+  "slack",
+  "google-workspace",
+]);
+const VALID_PROVIDER_AUTH_METHODS = new Set([
+  "user_oauth",
+  "user_key",
+  "org_key",
+]);
 const execFileAsync = promisify(execFile);
 
 function normalizeBaseUrl(value) {
   return value.replace(/\/api\/v1\/?$/, "").replace(/\/$/, "");
-}
-
-function normalizeUrl(value) {
-  return value.replace(/\/$/, "");
 }
 
 function required(name, value) {
@@ -79,77 +88,34 @@ function parseBoolean(name, value, fallback) {
   throw new Error(`${name} must be one of: true, false, 1, 0, yes, no.`);
 }
 
-function normalizeAuthMode(value) {
+function normalizeProviderType(value, presetKey) {
   const normalized = parseOptionalTrimmed(value);
   if (!normalized) {
-    return undefined;
+    return presetKey ? "preset" : undefined;
   }
 
-  if (!VALID_AUTH_MODES.has(normalized)) {
+  if (!VALID_PROVIDER_TYPES.has(normalized)) {
     throw new Error(
-      `KONTEXT_INTEGRATION_AUTH_MODE must be one of: ${Array.from(VALID_AUTH_MODES).join(", ")}`,
+      `KONTEXT_PROVIDER_TYPE must be one of: ${Array.from(VALID_PROVIDER_TYPES).join(", ")}`,
     );
   }
 
   return normalized;
 }
 
-function buildOauthConfig({ provider, issuer, scopes }) {
-  const oauth = {};
-
-  if (provider) {
-    oauth.provider = provider;
-  }
-  if (issuer) {
-    oauth.issuer = issuer;
-  }
-  if (Array.isArray(scopes) && scopes.length > 0) {
-    oauth.scopes = scopes;
+function normalizeProviderAuthMethod(value) {
+  const normalized = parseOptionalTrimmed(value);
+  if (!normalized) {
+    return undefined;
   }
 
-  return Object.keys(oauth).length > 0 ? oauth : undefined;
-}
-
-function buildIntegrationPayload(input) {
-  const payload = {};
-
-  if (input.name !== undefined) {
-    payload.name = input.name;
-  }
-  if (input.url !== undefined) {
-    payload.url = input.url;
-  }
-  if (input.authMode !== undefined) {
-    payload.authMode = input.authMode;
-  }
-  if (input.oauth !== undefined) {
-    payload.oauth = input.oauth;
-  }
-  if (input.serverToken !== undefined) {
-    payload.serverToken = input.serverToken;
+  if (!VALID_PROVIDER_AUTH_METHODS.has(normalized)) {
+    throw new Error(
+      `KONTEXT_PROVIDER_AUTH_METHOD must be one of: ${Array.from(VALID_PROVIDER_AUTH_METHODS).join(", ")}`,
+    );
   }
 
-  return payload;
-}
-
-function buildApplicationOauthPayload({
-  redirectUris,
-  pkceRequired,
-  scopes,
-  allowedResources,
-}) {
-  const payload = {
-    type: "public",
-    redirectUris,
-    pkceRequired,
-    scopes,
-  };
-
-  if (Array.isArray(allowedResources) && allowedResources.length > 0) {
-    payload.allowedResources = allowedResources;
-  }
-
-  return payload;
+  return normalized;
 }
 
 function arraysEqual(left, right) {
@@ -239,7 +205,7 @@ async function listAllApplications({ baseUrl, token }) {
   }
 }
 
-async function listAllIntegrations({ baseUrl, token }) {
+async function listAllProviders({ baseUrl, token }) {
   const items = [];
   let cursor;
 
@@ -249,7 +215,7 @@ async function listAllIntegrations({ baseUrl, token }) {
       baseUrl,
       token,
       method: "GET",
-      path: `/integrations${query}`,
+      path: `/providers${query}`,
     });
 
     items.push(...(response.items ?? []));
@@ -259,6 +225,26 @@ async function listAllIntegrations({ baseUrl, token }) {
 
     cursor = response.nextCursor;
   }
+}
+
+function buildApplicationOauthPayload({
+  redirectUris,
+  pkceRequired,
+  scopes,
+  allowedResources,
+}) {
+  const payload = {
+    type: "public",
+    redirectUris,
+    pkceRequired,
+    scopes,
+  };
+
+  if (Array.isArray(allowedResources) && allowedResources.length > 0) {
+    payload.allowedResources = allowedResources;
+  }
+
+  return payload;
 }
 
 async function resolveOrCreateApplication({
@@ -388,131 +374,163 @@ async function resolveOrCreateApplication({
   };
 }
 
-function buildDesiredIntegration({
-  integrationName,
-  integrationUrl,
-  integrationAuthMode,
-  oauthProvider,
-  oauthIssuer,
-  oauthScopes,
-  serverToken,
+function buildDesiredProvider({
+  providerType,
+  providerPresetKey,
+  providerHandle,
+  providerDisplayName,
+  providerAuthMethod,
+  providerScopes,
+  providerOauthIssuer,
+  providerOauthProvider,
+  providerClientId,
+  providerClientSecret,
+  providerOrganizationKey,
 }) {
-  const resolvedServerToken = parseOptionalTrimmed(serverToken);
-  if (resolvedServerToken && integrationAuthMode !== "server_token") {
+  const clientId = parseOptionalTrimmed(providerClientId);
+  const clientSecret = parseOptionalTrimmed(providerClientSecret);
+  const key = parseOptionalTrimmed(providerOrganizationKey);
+  const displayName = parseOptionalTrimmed(providerDisplayName);
+  const handle = parseOptionalTrimmed(providerHandle);
+  const authMethod = normalizeProviderAuthMethod(providerAuthMethod);
+  const oauthIssuer = parseOptionalTrimmed(providerOauthIssuer);
+  const oauthProvider = parseOptionalTrimmed(providerOauthProvider);
+  const presetKey =
+    parseOptionalTrimmed(providerPresetKey) ||
+    (handle && VALID_PROVIDER_PRESET_KEYS.has(handle) ? handle : undefined);
+  const type = normalizeProviderType(providerType, presetKey);
+
+  if (!type) {
+    return { create: null, update: null };
+  }
+
+  if (type === "preset") {
+    if (!presetKey) {
+      throw new Error(
+        "Preset provider bootstrap requires KONTEXT_PROVIDER_PRESET_KEY.",
+      );
+    }
+
+    return {
+      create: {
+        type: "preset",
+        presetKey,
+        ...(providerScopes.length > 0 ? { scopes: providerScopes } : {}),
+        ...(clientId ? { clientId } : {}),
+        ...(clientSecret ? { clientSecret } : {}),
+      },
+      update: {
+        ...(providerScopes.length > 0 ? { scopes: providerScopes } : {}),
+        ...(clientId ? { clientId } : {}),
+        ...(clientSecret ? { clientSecret } : {}),
+      },
+    };
+  }
+
+  if (!displayName && !authMethod) {
+    return { create: null, update: null };
+  }
+
+  if (!displayName || !authMethod) {
     throw new Error(
-      "KONTEXT_SERVER_TOKEN can only be used when KONTEXT_INTEGRATION_AUTH_MODE=server_token.",
+      "Custom provider bootstrap requires both KONTEXT_PROVIDER_DISPLAY_NAME and KONTEXT_PROVIDER_AUTH_METHOD.",
     );
   }
 
-  if (
-    (oauthProvider || oauthIssuer || (oauthScopes && oauthScopes.length > 0)) &&
-    integrationAuthMode !== "oauth"
-  ) {
+  if (authMethod === "user_oauth" && !oauthIssuer) {
     throw new Error(
-      "OAuth fields can only be used when KONTEXT_INTEGRATION_AUTH_MODE=oauth.",
+      "Custom OAuth providers require KONTEXT_PROVIDER_OAUTH_ISSUER.",
     );
   }
 
-  return {
-    name: integrationName,
-    url: integrationUrl,
-    authMode: integrationAuthMode,
-    oauth: buildOauthConfig({
-      provider: oauthProvider,
-      issuer: oauthIssuer,
-      scopes: oauthScopes,
-    }),
-    serverToken: resolvedServerToken,
+    return {
+      create: {
+        type: "custom",
+      displayName,
+      authMethod,
+      ...(authMethod === "user_oauth"
+        ? {
+            oauth: {
+              issuer: oauthIssuer,
+              ...(oauthProvider ? { provider: oauthProvider } : {}),
+              ...(providerScopes.length > 0 ? { scopes: providerScopes } : {}),
+              ...(clientId ? { clientId } : {}),
+              ...(clientSecret ? { clientSecret } : {}),
+            },
+          }
+        : {}),
+      ...(authMethod === "org_key" && key ? { key } : {}),
+    },
+    update: {
+      ...(displayName ? { displayName } : {}),
+      ...(providerScopes.length > 0 ? { scopes: providerScopes } : {}),
+      ...(clientId ? { clientId } : {}),
+      ...(clientSecret ? { clientSecret } : {}),
+      ...(oauthIssuer ? { issuer: oauthIssuer } : {}),
+      ...(oauthProvider ? { provider: oauthProvider } : {}),
+    },
   };
 }
 
-async function resolveExistingIntegration({
+async function resolveExistingProvider({
   baseUrl,
   token,
-  integrationId,
-  integrationName,
+  providerId,
+  providerHandle,
+  providerDisplayName,
+  providerPresetKey,
 }) {
-  if (integrationId) {
+  if (providerId) {
     const response = await apiRequest({
       baseUrl,
       token,
       method: "GET",
-      path: `/integrations/${integrationId}`,
+      path: `/providers/${providerId}`,
     });
-    return response.integration;
+    return response.provider;
   }
 
-  if (!integrationName) {
-    return null;
+  const providers = await listAllProviders({ baseUrl, token });
+
+  if (providerHandle) {
+    const exact = providers.find((item) => item.handle === providerHandle);
+    if (exact) {
+      return exact;
+    }
   }
 
-  return (
-    (await listAllIntegrations({ baseUrl, token })).find(
-      (item) => item.name === integrationName,
-    ) ?? null
-  );
+  if (providerDisplayName) {
+    const exact = providers.find((item) => item.displayName === providerDisplayName);
+    if (exact) {
+      return exact;
+    }
+  }
+
+  if (providerPresetKey) {
+    return providers.find((item) => item.presetKey === providerPresetKey) ?? null;
+  }
+
+  return null;
 }
 
-function shouldUpdateIntegration(existing, desired) {
-  if (!existing) {
-    return false;
-  }
-
-  if (desired.name !== undefined && desired.name !== existing.name) {
-    return true;
-  }
-  if (
-    desired.url !== undefined &&
-    normalizeUrl(desired.url) !== normalizeUrl(existing.url)
-  ) {
-    return true;
-  }
-  if (
-    desired.authMode !== undefined &&
-    desired.authMode !== (existing.authMode ?? "none")
-  ) {
-    return true;
-  }
-  if (desired.oauth) {
-    const existingScopes = Array.isArray(existing.oauth?.scopes)
-      ? existing.oauth.scopes
-      : [];
-    const desiredScopes = Array.isArray(desired.oauth.scopes)
-      ? desired.oauth.scopes
-      : [];
-
-    if ((desired.oauth.provider ?? null) !== (existing.oauth?.provider ?? null)) {
-      return true;
-    }
-    if ((desired.oauth.issuer ?? null) !== (existing.oauth?.issuer ?? null)) {
-      return true;
-    }
-    if (!arraysEqual(desiredScopes, existingScopes)) {
-      return true;
-    }
-  }
-  if (desired.serverToken !== undefined) {
-    return true;
-  }
-
-  return false;
+function hasProviderUpdate(update) {
+  return Boolean(update && Object.keys(update).length > 0);
 }
 
-async function upsertIntegration({
+async function upsertProvider({
   baseUrl,
   token,
   existing,
   desired,
-  validateIntegration,
 }) {
-  let integration = existing;
+  let provider = existing;
   let created = false;
   let updated = false;
 
-  if (!integration) {
-    if (!desired.name || !desired.url) {
+  if (!provider) {
+    if (!desired.create) {
       throw new Error(
-        "Creating an integration requires KONTEXT_INTEGRATION_NAME and KONTEXT_INTEGRATION_URL.",
+        "Creating a provider requires KONTEXT_PROVIDER_PRESET_KEY for preset providers, or KONTEXT_PROVIDER_DISPLAY_NAME plus KONTEXT_PROVIDER_AUTH_METHOD for custom providers.",
       );
     }
 
@@ -520,45 +538,21 @@ async function upsertIntegration({
       baseUrl,
       token,
       method: "POST",
-      path: "/integrations",
-      body: buildIntegrationPayload({
-        name: desired.name,
-        url: desired.url,
-        authMode: desired.authMode ?? "none",
-        oauth: desired.oauth,
-        serverToken: desired.serverToken,
-      }),
+      path: "/providers",
+      body: desired.create,
     });
-
-    integration = createdResponse.integration;
+    provider = createdResponse.provider;
     created = true;
-  } else if (shouldUpdateIntegration(integration, desired)) {
+  } else if (hasProviderUpdate(desired.update)) {
     const updatedResponse = await apiRequest({
       baseUrl,
       token,
       method: "PATCH",
-      path: `/integrations/${integration.id}`,
-      body: buildIntegrationPayload({
-        name: desired.name,
-        url: desired.url,
-        authMode: desired.authMode,
-        oauth: desired.oauth,
-        serverToken: desired.serverToken,
-      }),
+      path: `/providers/${provider.id}`,
+      body: desired.update,
     });
-
-    integration = updatedResponse.integration;
+    provider = updatedResponse.provider;
     updated = true;
-  }
-
-  let validation = null;
-  if (validateIntegration) {
-    validation = await apiRequest({
-      baseUrl,
-      token,
-      method: "POST",
-      path: `/integrations/${integration.id}/validate`,
-    });
   }
 
   const refreshed = (
@@ -566,69 +560,62 @@ async function upsertIntegration({
       baseUrl,
       token,
       method: "GET",
-      path: `/integrations/${integration.id}`,
+      path: `/providers/${provider.id}`,
     })
-  ).integration;
+  ).provider;
 
   return {
-    integration: refreshed,
+    provider: refreshed,
     created,
     updated,
-    validation,
   };
 }
 
-async function ensureAttached({ baseUrl, token, applicationId, integrationId }) {
+async function ensureAttached({
+  baseUrl,
+  token,
+  applicationId,
+  providerId,
+  mcpEnabled,
+}) {
   const attached = await apiRequest({
     baseUrl,
     token,
     method: "GET",
-    path: `/applications/${applicationId}/integrations`,
+    path: `/applications/${applicationId}/providers`,
   });
 
-  const attachedIds = new Set(attached.integrationIds ?? []);
-  if (attachedIds.has(integrationId)) {
-    return false;
+  const items = attached.items ?? [];
+  if (items.some((item) => item.providerId === providerId)) {
+    return {
+      attached: false,
+      revision: attached.revision,
+    };
   }
 
-  await apiRequest({
+  const nextItems = [
+    ...items.map((item) => ({
+      providerId: item.providerId,
+      mcpEnabled: item.mcpEnabled,
+    })),
+    { providerId, mcpEnabled },
+  ];
+
+  const updated = await apiRequest({
     baseUrl,
     token,
-    method: "POST",
-    path: `/applications/${applicationId}/integrations/${integrationId}`,
+    method: "PUT",
+    path: `/applications/${applicationId}/providers`,
+    body: {
+      expectedRevision: attached.revision,
+      items: nextItems,
+    },
   });
 
-  return true;
-}
-
-async function writeEnvValue({ outputFile, variableName, value }) {
-  const absolutePath = path.resolve(outputFile);
-  await ensureFileIsNotTracked(absolutePath);
-  let contents = "";
-
-  try {
-    contents = await fs.readFile(absolutePath, "utf8");
-  } catch (error) {
-    if (error.code !== "ENOENT") {
-      throw error;
-    }
-  }
-
-  const line = `${variableName}=${value}`;
-  const pattern = new RegExp(`^${escapeRegex(variableName)}=.*$`, "m");
-  let nextContents;
-
-  if (pattern.test(contents)) {
-    nextContents = contents.replace(pattern, line);
-  } else if (contents.length === 0) {
-    nextContents = `${line}\n`;
-  } else {
-    const separator = contents.endsWith("\n") ? "" : "\n";
-    nextContents = `${contents}${separator}${line}\n`;
-  }
-
-  await fs.writeFile(absolutePath, nextContents, "utf8");
-  return absolutePath;
+  return {
+    attached: true,
+    revision: updated.revision,
+  };
 }
 
 async function ensureFileIsNotTracked(absolutePath) {
@@ -665,12 +652,42 @@ async function ensureFileIsNotTracked(absolutePath) {
   }
 }
 
-function buildRuntimeSummary(integrationName) {
+async function writeEnvValue({ outputFile, variableName, value }) {
+  const absolutePath = path.resolve(outputFile);
+  await ensureFileIsNotTracked(absolutePath);
+  let contents = "";
+
+  try {
+    contents = await fs.readFile(absolutePath, "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const line = `${variableName}=${value}`;
+  const pattern = new RegExp(`^${escapeRegex(variableName)}=.*$`, "m");
+  let nextContents;
+
+  if (pattern.test(contents)) {
+    nextContents = contents.replace(pattern, line);
+  } else if (contents.length === 0) {
+    nextContents = `${line}\n`;
+  } else {
+    const separator = contents.endsWith("\n") ? "" : "\n";
+    nextContents = `${contents}${separator}${line}\n`;
+  }
+
+  await fs.writeFile(absolutePath, nextContents, "utf8");
+  return absolutePath;
+}
+
+function buildRuntimeSummary(providerHandle) {
   return {
-    retrievalMethod: "kontext.require(integration, token)",
-    integrationName,
+    retrievalMethod: "kontext.requireProvider(providerHandle, token)",
+    providerHandle,
     firstTimeConnect: "hosted_connect",
-    note: "Pass the authenticated Kontext token into runtime code and handle IntegrationConnectionRequiredError for first-time connect.",
+    note: "Pass the authenticated Kontext token into runtime code and handle ProviderConnectionRequiredError for first-time connect.",
   };
 }
 
@@ -687,15 +704,19 @@ async function main() {
       "application-scopes": { type: "string" },
       "application-pkce-required": { type: "string" },
       "application-allowed-resources": { type: "string" },
-      "integration-id": { type: "string" },
-      "integration-name": { type: "string" },
-      "integration-url": { type: "string" },
-      "integration-auth-mode": { type: "string" },
-      "integration-oauth-provider": { type: "string" },
-      "integration-oauth-issuer": { type: "string" },
-      "integration-oauth-scopes": { type: "string" },
-      "server-token": { type: "string" },
-      "validate-integration": { type: "boolean", default: false },
+      "provider-id": { type: "string" },
+      "provider-handle": { type: "string" },
+      "provider-display-name": { type: "string" },
+      "provider-type": { type: "string" },
+      "provider-preset-key": { type: "string" },
+      "provider-auth-method": { type: "string" },
+      "provider-scopes": { type: "string" },
+      "provider-oauth-issuer": { type: "string" },
+      "provider-oauth-provider": { type: "string" },
+      "provider-client-id": { type: "string" },
+      "provider-client-secret": { type: "string" },
+      "provider-key": { type: "string" },
+      "provider-mcp-enabled": { type: "string" },
       "output-env-file": { type: "string" },
       "public-client-id-env-name": { type: "string" },
       json: { type: "boolean", default: false },
@@ -755,37 +776,53 @@ async function main() {
       process.env.KONTEXT_APPLICATION_ALLOWED_RESOURCES_JSON,
     ["mcp-gateway"],
   );
-  const integrationId = parseOptionalTrimmed(
-    values["integration-id"] || process.env.KONTEXT_INTEGRATION_ID,
+
+  const providerId = parseOptionalTrimmed(
+    values["provider-id"] || process.env.KONTEXT_PROVIDER_ID,
   );
-  const integrationName = parseOptionalTrimmed(
-    values["integration-name"] || process.env.KONTEXT_INTEGRATION_NAME,
+  const providerHandle = parseOptionalTrimmed(
+    values["provider-handle"] || process.env.KONTEXT_PROVIDER_HANDLE,
   );
-  const integrationUrl = parseOptionalTrimmed(
-    values["integration-url"] || process.env.KONTEXT_INTEGRATION_URL,
+  const providerDisplayName = parseOptionalTrimmed(
+    values["provider-display-name"] || process.env.KONTEXT_PROVIDER_DISPLAY_NAME,
   );
-  const integrationAuthMode = normalizeAuthMode(
-    values["integration-auth-mode"] ||
-      process.env.KONTEXT_INTEGRATION_AUTH_MODE,
+  const providerType = parseOptionalTrimmed(
+    values["provider-type"] || process.env.KONTEXT_PROVIDER_TYPE,
   );
-  const oauthProvider = parseOptionalTrimmed(
-    values["integration-oauth-provider"] ||
-      process.env.KONTEXT_INTEGRATION_OAUTH_PROVIDER,
+  const providerPresetKey = parseOptionalTrimmed(
+    values["provider-preset-key"] || process.env.KONTEXT_PROVIDER_PRESET_KEY,
   );
-  const oauthIssuer = parseOptionalTrimmed(
-    values["integration-oauth-issuer"] ||
-      process.env.KONTEXT_INTEGRATION_OAUTH_ISSUER,
+  const providerAuthMethod = parseOptionalTrimmed(
+    values["provider-auth-method"] || process.env.KONTEXT_PROVIDER_AUTH_METHOD,
   );
-  const oauthScopesRaw =
-    values["integration-oauth-scopes"] ||
-    process.env.KONTEXT_INTEGRATION_OAUTH_SCOPES_JSON;
-  const oauthScopes = oauthScopesRaw
-    ? parseStringArray("KONTEXT_INTEGRATION_OAUTH_SCOPES_JSON", oauthScopesRaw, [])
-    : undefined;
-  const serverToken = values["server-token"] || process.env.KONTEXT_SERVER_TOKEN;
-  const validateIntegration =
-    values["validate-integration"] ||
-    process.env.KONTEXT_VALIDATE_INTEGRATION === "true";
+  const providerScopes = parseStringArray(
+    "KONTEXT_PROVIDER_SCOPES_JSON",
+    values["provider-scopes"] || process.env.KONTEXT_PROVIDER_SCOPES_JSON,
+    [],
+  );
+  const providerOauthIssuer = parseOptionalTrimmed(
+    values["provider-oauth-issuer"] ||
+      process.env.KONTEXT_PROVIDER_OAUTH_ISSUER,
+  );
+  const providerOauthProvider = parseOptionalTrimmed(
+    values["provider-oauth-provider"] ||
+      process.env.KONTEXT_PROVIDER_OAUTH_PROVIDER,
+  );
+  const providerClientId = parseOptionalTrimmed(
+    values["provider-client-id"] || process.env.KONTEXT_PROVIDER_CLIENT_ID,
+  );
+  const providerClientSecret = parseOptionalTrimmed(
+    values["provider-client-secret"] ||
+      process.env.KONTEXT_PROVIDER_CLIENT_SECRET,
+  );
+  const providerOrganizationKey = parseOptionalTrimmed(
+    values["provider-key"] || process.env.KONTEXT_PROVIDER_KEY,
+  );
+  const providerMcpEnabled = parseBoolean(
+    "KONTEXT_PROVIDER_MCP_ENABLED",
+    values["provider-mcp-enabled"] || process.env.KONTEXT_PROVIDER_MCP_ENABLED,
+    false,
+  );
   const outputEnvFile = parseOptionalTrimmed(
     values["output-env-file"] || process.env.KONTEXT_OUTPUT_ENV_FILE,
   );
@@ -820,46 +857,48 @@ async function main() {
     allowedResources,
   });
 
-  const desired = buildDesiredIntegration({
-    integrationName,
-    integrationUrl,
-    integrationAuthMode,
-    oauthProvider,
-    oauthIssuer,
-    oauthScopes,
-    serverToken,
+  const desiredProvider = buildDesiredProvider({
+    providerType,
+    providerPresetKey,
+    providerHandle,
+    providerDisplayName,
+    providerAuthMethod,
+    providerScopes,
+    providerOauthIssuer,
+    providerOauthProvider,
+    providerClientId,
+    providerClientSecret,
+    providerOrganizationKey,
   });
 
-  const existingIntegration = await resolveExistingIntegration({
+  const existingProvider = await resolveExistingProvider({
     baseUrl,
     token,
-    integrationId,
-    integrationName,
+    providerId,
+    providerHandle,
+    providerDisplayName,
+    providerPresetKey,
   });
 
-  if (
-    !existingIntegration &&
-    desired.name === undefined &&
-    desired.url === undefined
-  ) {
+  if (!existingProvider && !desiredProvider.create) {
     throw new Error(
-      "Set KONTEXT_INTEGRATION_ID or KONTEXT_INTEGRATION_NAME to attach an existing integration, or provide KONTEXT_INTEGRATION_NAME plus KONTEXT_INTEGRATION_URL to create a new one.",
+      "Set KONTEXT_PROVIDER_ID or KONTEXT_PROVIDER_HANDLE to reuse an existing provider, or provide provider creation inputs such as KONTEXT_PROVIDER_PRESET_KEY or KONTEXT_PROVIDER_DISPLAY_NAME plus KONTEXT_PROVIDER_AUTH_METHOD.",
     );
   }
 
-  const integrationResult = await upsertIntegration({
+  const providerResult = await upsertProvider({
     baseUrl,
     token,
-    existing: existingIntegration,
-    desired,
-    validateIntegration,
+    existing: existingProvider,
+    desired: desiredProvider,
   });
 
-  const attachedNow = await ensureAttached({
+  const attachmentResult = await ensureAttached({
     baseUrl,
     token,
     applicationId: applicationResult.application.id,
-    integrationId: integrationResult.integration.id,
+    providerId: providerResult.provider.id,
+    mcpEnabled: providerMcpEnabled,
   });
 
   let envOutput = null;
@@ -889,20 +928,22 @@ async function main() {
       updated: applicationResult.updated,
       allowedResourcesNote: applicationResult.allowedResourcesNote,
     },
-    integration: {
-      id: integrationResult.integration.id,
-      name: integrationResult.integration.name,
-      url: integrationResult.integration.url,
-      authMode: integrationResult.integration.authMode,
-      oauth: integrationResult.integration.oauth ?? null,
-      serverTokenConfigured:
-        integrationResult.integration.serverTokenConfigured ?? false,
-      created: integrationResult.created,
-      updated: integrationResult.updated,
-      attached: attachedNow ? "attached_now" : "already_attached",
-      validation: integrationResult.validation,
+    provider: {
+      id: providerResult.provider.id,
+      handle: providerResult.provider.handle,
+      displayName: providerResult.provider.displayName,
+      kind: providerResult.provider.kind,
+      authMethod: providerResult.provider.authMethod,
+      presetKey: providerResult.provider.presetKey ?? null,
+      oauthProvider: providerResult.provider.oauthProvider ?? null,
+      oauthIssuer: providerResult.provider.oauthIssuer ?? null,
+      oauthScopes: providerResult.provider.oauthScopes ?? [],
+      created: providerResult.created,
+      updated: providerResult.updated,
+      attached: attachmentResult.attached ? "attached_now" : "already_attached",
+      providerRevision: attachmentResult.revision,
     },
-    runtime: buildRuntimeSummary(integrationResult.integration.name),
+    runtime: buildRuntimeSummary(providerResult.provider.handle),
     envOutput,
   };
 
@@ -947,59 +988,39 @@ async function main() {
   }
 
   console.log("");
-  console.log("Integration:");
-  console.log(`- Name: ${result.integration.name}`);
-  console.log(`- Integration ID: ${result.integration.id}`);
-  console.log(`- URL: ${result.integration.url}`);
-  console.log(`- Auth mode: ${result.integration.authMode}`);
-  if (result.integration.oauth) {
-    console.log(
-      `- OAuth provider: ${result.integration.oauth.provider ?? "not set"}`,
-    );
-    console.log(
-      `- OAuth issuer: ${result.integration.oauth.issuer ?? "not set"}`,
-    );
-    if (Array.isArray(result.integration.oauth.scopes)) {
-      console.log(
-        `- OAuth scopes: ${
-          result.integration.oauth.scopes.length > 0
-            ? result.integration.oauth.scopes.join(", ")
-            : "none"
-        }`,
-      );
-    }
+  console.log("Provider:");
+  console.log(`- Display name: ${result.provider.displayName}`);
+  console.log(`- Handle: ${result.provider.handle}`);
+  console.log(`- Provider ID: ${result.provider.id}`);
+  console.log(`- Kind: ${result.provider.kind}`);
+  console.log(`- Auth method: ${result.provider.authMethod}`);
+  if (result.provider.presetKey) {
+    console.log(`- Preset key: ${result.provider.presetKey}`);
   }
-  if (result.integration.authMode === "server_token") {
-    console.log(
-      `- Shared token configured: ${
-        result.integration.serverTokenConfigured ? "yes" : "no"
-      }`,
-    );
+  if (result.provider.oauthProvider) {
+    console.log(`- OAuth provider: ${result.provider.oauthProvider}`);
+  }
+  if (result.provider.oauthIssuer) {
+    console.log(`- OAuth issuer: ${result.provider.oauthIssuer}`);
+  }
+  if (result.provider.oauthScopes.length > 0) {
+    console.log(`- OAuth scopes: ${result.provider.oauthScopes.join(", ")}`);
   }
   console.log(
     `- Status: ${
-      result.integration.created
+      result.provider.created
         ? "created"
-        : result.integration.updated
+        : result.provider.updated
           ? "updated"
           : "reused"
     }`,
   );
-  console.log(`- App attachment: ${result.integration.attached}`);
-  if (result.integration.validation) {
-    console.log(
-      `- Validation: ${result.integration.validation.status}${
-        result.integration.validation.message
-          ? ` (${result.integration.validation.message})`
-          : ""
-      }`,
-    );
-  }
+  console.log(`- App attachment: ${result.provider.attached}`);
 
   console.log("");
   console.log("Runtime:");
   console.log(`- Retrieval method: ${result.runtime.retrievalMethod}`);
-  console.log(`- Integration name: ${result.runtime.integrationName}`);
+  console.log(`- Provider handle: ${result.runtime.providerHandle}`);
   console.log(`- First-time connect: ${result.runtime.firstTimeConnect}`);
   console.log(`- Notes: ${result.runtime.note}`);
 
