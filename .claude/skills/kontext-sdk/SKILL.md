@@ -35,13 +35,20 @@ Based on scan results, classify into one or more integration paths:
 | `ai` with `generateText` or `streamText` | **AI adapter** — `toKontextTools` converts Kontext tools to Vercel AI CoreTool format | `references/frameworks.md` |
 | `agents` or `wrangler.toml` | **Cloudflare adapter** — `withKontext` mixin | `references/frameworks.md` |
 | Client app with auth flows, no server | **Client SDK** — `createKontextClient` with OAuth | `references/client.md` |
+| CLI tool, Node.js script, or desktop agent connecting to MCP gateway | **Public OAuth + MCP Gateway** — manual OAuth+PKCE, direct MCP client | `references/public-oauth-mcp.md` |
 | Own user auth plus server-side credential retrieval needs | **Credential vault** — partner connect bootstrap plus `kontext.require(integration, { userId })` | `references/credential-vault.md` |
-| Infrastructure or automation scripts | **Management SDK** — programmatic control | `references/management.md` |
+| Infrastructure, CI/CD, or automation scripts | **Management SDK** — programmatic control via service account credentials | `references/management.md` |
 
 **Most full-stack apps need multiple paths.** A typical React + Express app may need:
 - Server SDK for the backend
 - React hooks for frontend auth state
 - AI adapter if using Vercel AI SDK
+
+**Integration auth modes:** When the app needs server-side credential retrieval (`kontext-sdk-credentials`), the integration's auth mode determines the flow:
+- `oauth` — user connects via OAuth, then `kontext.require()` returns their scoped token
+- `user_token` — user provides their own API key/PAT, then `kontext.require()` returns it
+- `server_token` — admin sets one shared token, all users of attached apps can retrieve it immediately
+- `none` — no credential exchange; used for public APIs
 
 ## Step 3: Identify Integration Points
 
@@ -94,6 +101,27 @@ Use this decision rule:
 - the app can implement partner connect bootstrap with JWT + JWKS
 
 
+## Management SDK & Service Accounts
+
+Service accounts are machine identities for programmatic access to the Kontext Management API. They authenticate via OAuth2 client credentials — no human login required.
+
+- Create one in the dashboard at **Settings > Service Accounts** (requires admin/owner role), or programmatically via `mgmt.serviceAccounts.create()` if you already have one
+- Use the returned `clientId` + `clientSecret` to initialize `KontextManagementClient`
+- From there you can create applications, manage integrations, rotate secrets, query sessions and traces
+
+Service accounts are **not** Applications. Applications are the agent products you build for end users. Service accounts are how you automate Kontext itself (CI/CD, Terraform, bootstrap scripts).
+
+See `references/management.md` for the full API surface.
+
+## Sessions & Traces
+
+For production observability, the Management SDK exposes sessions and traces:
+
+- **Sessions** — monitor active MCP connections per application, check idle/expired/disconnected status, revoke all sessions during incidents
+- **Traces** — query tool execution logs filtered by user, session, or application. Use `mgmt.traces.stats({ period: "24h" })` for error rates, latency percentiles, and top tools
+
+See the Agent Sessions and Traces sections in `references/management.md` for the full API.
+
 ## Package
 
 ```bash
@@ -139,14 +167,18 @@ If not, do not oversell credential vault mode as turnkey.
 
 ### `requireCredentials(integration, token)`
 
-For integrations with `connectType: "user_token"` such as API-key-style credentials:
+For integrations with category `internal_mcp_credentials` that use credential schemas (API keys, static secrets) rather than OAuth:
 
 ```typescript
 const resolved = await kontext.requireCredentials("custom-api", token);
 // resolved.credentials = { apiKey: "...", apiSecret: "..." }
 ```
 
-Only accepts a raw token. It does not support `{ userId }` mode.
+- Returns a `Record<string, string>` credential map instead of `accessToken`/`authorization`
+- Only accepts a raw token — does **not** support `{ userId }` mode
+- No built-in `authorization` header formatting — use credential fields directly
+
+See `references/server.md` § `kontext.requireCredentials` for full details.
 
 ## External Auth Requirements
 
@@ -168,34 +200,13 @@ If the user's auth provider does not expose issuer/JWKS in a way Kontext can ver
 
 See `references/credential-vault.md` for the full setup guide, including provider-specific values and code examples.
 
-## Orchestrator
-
-`createKontextOrchestrator` is a hybrid client that combines gateway-routed tools with direct internal MCP connections. It is used when `createKontextClient` is called without a `url` parameter:
-
-```typescript
-import { createKontextOrchestrator } from "@kontext-dev/js-sdk";
-
-const orchestrator = createKontextOrchestrator({
-  clientId: "your-app-client-id",
-  redirectUri: "http://localhost:3000/callback",
-  onAuthRequired: (url) => {
-    window.location.href = url.toString();
-  },
-});
-
-await orchestrator.connect();
-const tools = await orchestrator.tools.list();
-```
-
-Same interface as `KontextClient`. Use when the app needs both Kontext-managed integrations and direct MCP server connections.
-
 ## Subpath Exports
 
 Use the narrowest import path for the integration:
 
 | Import | Export | Use For |
 |--------|--------|---------|
-| `@kontext-dev/js-sdk` | `createKontextClient`, `createKontextOrchestrator`, `Kontext` | Root convenience |
+| `@kontext-dev/js-sdk` | `createKontextClient`, `createKontextOrchestrator`, `Kontext` | Root convenience. Orchestrator aggregates tools from multiple integrations — see `references/server.md` § Orchestrator |
 | `@kontext-dev/js-sdk/client` | `createKontextClient` | Client SDK |
 | `@kontext-dev/js-sdk/server` | `Kontext` | Server SDK |
 | `@kontext-dev/js-sdk/ai` | `toKontextTools` | Vercel AI SDK adapter |
@@ -203,9 +214,9 @@ Use the narrowest import path for the integration:
 | `@kontext-dev/js-sdk/react/cloudflare` | `useKontextAgent`, `useKontextContext` | React + Cloudflare Agents |
 | `@kontext-dev/js-sdk/cloudflare` | `withKontext`, `KontextCloudflareOAuthProvider`, `DurableObjectKontextStorage` | Cloudflare adapter |
 | `@kontext-dev/js-sdk/management` | `KontextManagementClient` | Management API |
-| `@kontext-dev/js-sdk/mcp` | `KontextMcp` | Low-level MCP client |
-| `@kontext-dev/js-sdk/errors` | Error classes and utilities | Error handling |
-| `@kontext-dev/js-sdk/verify` | `KontextTokenVerifier` | Token verification |
+| `@kontext-dev/js-sdk/mcp` | `KontextMcp` | Low-level MCP client — direct protocol access with OAuth handling. See `references/server.md` § Low-Level MCP Client |
+| `@kontext-dev/js-sdk/errors` | Error classes and utilities | Error handling — full error code reference in `references/errors.md` |
+| `@kontext-dev/js-sdk/verify` | `KontextTokenVerifier`, `parseOAuthCallback`, `exchangeToken` | Token verification and custom OAuth flows. See `references/server.md` § Token Verification |
 | `@kontext-dev/js-sdk/oauth` | OAuth utilities | OAuth helpers |
 
 ## Peer Dependencies
@@ -227,8 +238,11 @@ Install only what the integration path requires:
 | `KONTEXT_CLIENT_SECRET` | Server SDK | Client secret for token exchange. Auto-read by constructor. |
 | `KONTEXT_TOKEN_ISSUER` | Server SDK | Custom token issuer URL(s). Comma-separated for multiple. |
 | `KONTEXT_CLIENT_ID` | Cloudflare adapter | Application client ID. Auto-read by `withKontext`. |
+| `KONTEXT_SERVER_URL` | Cloudflare adapter | Override API base URL (optional). |
 
 ## Error Handling
+
+See `references/errors.md` for the full error code reference with resolution guidance for all 20+ error codes.
 
 ### Error classes and utilities
 
@@ -241,7 +255,7 @@ Install only what the integration path requires:
 | `isNetworkError` | Detection function | Detect unreachable API and transport failures |
 | `isUnauthorizedError` | Detection function | Detect expired or invalid auth |
 | `translateError` | Error translator | Unified error translation |
-| `ElicitationEntry` | Type | Elicitation flow entry |
+
 
 ### Basic pattern
 
@@ -300,7 +314,7 @@ try {
 
 - Never hardcode `clientSecret` in source code. Use `KONTEXT_CLIENT_SECRET`.
 - Never store access tokens in client-side storage unless using the SDK's intended storage abstraction.
-- Use `kontext.require()` for OAuth integrations and `kontext.requireCredentials()` for API-key integrations.
+- Use `kontext.require()` for OAuth integrations and `kontext.requireCredentials()` for API-key/credential-schema integrations. See `references/server.md` for full API details.
 - Install only the peer dependencies needed for the chosen subpath export.
 - The `Kontext` server class auto-reads `KONTEXT_CLIENT_SECRET` from env.
 - Always scan the codebase before recommending an integration path.

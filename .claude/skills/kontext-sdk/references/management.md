@@ -2,6 +2,31 @@
 
 Automate applications, integrations, service accounts, sessions, and traces programmatically.
 
+## REST API Base
+
+```
+https://api.kontext.dev/api/v1
+```
+
+All requests require `Authorization: Bearer <token>` header (service account token or user token).
+
+### Response Format
+
+- Single resource: `{ "application": { ... } }`
+- List: `{ "items": [...], "nextCursor"?: "..." }`
+- Pagination: `limit` (1-200, default 50) + `cursor`
+
+### Error Codes
+
+| Status | Meaning |
+|--------|---------|
+| 400 | Invalid request |
+| 401 | Authentication failure |
+| 403 | Insufficient permissions |
+| 404 | Not found |
+| 409 | Conflict |
+| 429 | Rate limited |
+
 ## Install
 
 ```bash
@@ -51,17 +76,19 @@ interface KontextManagementClientConfig {
 
 ### Applications
 
+See [api-applications.md](api-applications.md) for full REST endpoint details.
+
 ```typescript
 mgmt.applications.create(input)        // Create app + OAuth config
 mgmt.applications.list(pagination?)     // List all apps
 mgmt.applications.get(id)              // Get app details
 mgmt.applications.update(id, input)    // Update app name
-mgmt.applications.archive(id)          // Archive app
+mgmt.applications.archive(id)          // Archive (revokes all sessions, non-destructive)
 
 // OAuth management
-mgmt.applications.getOAuth(id)
-mgmt.applications.updateOAuth(id, input)
-mgmt.applications.rotateSecret(id)
+mgmt.applications.getOAuth(id)         // aka getOAuthConfig
+mgmt.applications.updateOAuth(id, input) // aka updateOAuthConfig
+mgmt.applications.rotateSecret(id)     // Secret returned ONCE, store immediately
 
 // Integration attachments
 mgmt.applications.listIntegrations(id)
@@ -75,13 +102,25 @@ mgmt.applications.revokeAllAgentSessions(id)
 
 ### Integrations
 
+See [api-integrations.md](api-integrations.md) for full REST endpoint details.
+
 ```typescript
 mgmt.integrations.create(input)        // Create integration
 mgmt.integrations.list(pagination?)     // List all
 mgmt.integrations.get(id)              // Get details
 mgmt.integrations.update(id, input)    // Update config
 mgmt.integrations.archive(id)          // Archive
-mgmt.integrations.validate(id)         // Validate connectivity
+mgmt.integrations.validate(id)         // Validate MCP endpoint connectivity
+
+// OAuth configuration (for oauth auth mode)
+mgmt.integrations.setOAuthConfig(id, {
+  clientId, clientSecret, authorizationUrl, tokenUrl, scopes
+})
+
+// User connections (for user_token auth mode)
+mgmt.integrations.addConnection(id, { token: "..." })
+mgmt.integrations.getConnectionStatus(id)
+mgmt.integrations.revokeConnection(id)
 ```
 
 Integration auth modes: `"oauth"`, `"user_token"`, `"server_token"`, `"none"`.
@@ -96,12 +135,27 @@ mgmt.serviceAccounts.rotateSecret(id)
 mgmt.serviceAccounts.revoke(id)
 ```
 
+#### Direct Token Request (No SDK)
+
+```bash
+curl -X POST https://api.kontext.dev/oauth2/token \
+  -d "grant_type=client_credentials" \
+  -d "client_id=sa_your-id" \
+  -d "client_secret=your-secret"
+```
+
+Service accounts can only access the Management API -- they cannot invoke tools or access integration credentials.
+
 ### Agent Sessions
 
 ```typescript
-mgmt.agentSessions.list(appId, { status?, limit?, includeInactive? })
-mgmt.agentSessions.get(appId, sessionId)
-mgmt.agentSessions.revokeAll(appId)
+mgmt.agentSessions.list(applicationId, { status?, limit?, includeInactive? })
+// status: "active" | "inactive" | "all" (default: "active")
+// limit: default 100
+mgmt.agentSessions.get(applicationId, sessionId)
+// session.derivedStatus: "active" | "idle" | "expired" | "disconnected"
+mgmt.agentSessions.revokeAll(applicationId)
+// returns { success: boolean, disconnectedCount: number }
 ```
 
 ### Traces
@@ -109,8 +163,20 @@ mgmt.agentSessions.revokeAll(appId)
 ```typescript
 mgmt.traces.list({ userId?, agentId?, applicationId?, sessionId?, limit?, offset? })
 mgmt.traces.get(traceId, { userId? })
+// returns { trace, events }
 mgmt.traces.stats({ period?, userId? })
+// period: "1d" | "7d" | "30d"
 ```
+
+#### Event Status Values
+
+| Status | Meaning |
+|--------|---------|
+| `ok` | Successful execution |
+| `warn` | Completed with warnings |
+| `error_remote` | Remote server error |
+| `error_proxy` | Proxy/gateway error |
+| `error_auth` | Authentication/authorization failure |
 
 ### Events
 

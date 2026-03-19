@@ -61,15 +61,37 @@ interface KontextToolsResult {
 }
 ```
 
-### With Orchestrator
-
-Works identically with `createKontextOrchestrator`:
+### Streaming
 
 ```typescript
-const orchestrator = createKontextOrchestrator({ /* config */ });
-await orchestrator.connect();
-const { tools, systemPrompt } = await toKontextTools(orchestrator);
+import { streamText } from "ai";
+
+const stream = streamText({
+  model: openai("gpt-4o"),
+  system: systemPrompt,
+  tools,
+  prompt: userMessage,
+  maxSteps: 5,
+});
+
+for await (const chunk of stream) {
+  process.stdout.write(chunk);
+}
 ```
+
+### Custom Result Formatting
+
+```typescript
+const { tools } = await toKontextTools(client, {
+  formatResult: (result) => {
+    return JSON.stringify(result);
+  },
+});
+```
+
+### Multi-Step Workflows
+
+`maxSteps: 5` covers most multi-tool workflows. Increase for complex chains.
 
 ---
 
@@ -116,6 +138,25 @@ function MyComponent() {
 
   return <div>Ready</div>;
 }
+```
+
+### OAuth Flow
+
+1. Provider detects auth needed
+2. Popup opens to Kontext authorization page
+3. User signs in and consents
+4. Backend handles OAuth callback with token exchange
+5. Popup closes, session resumes
+
+No redirect handlers or callback routes needed — popups handle everything.
+
+### Integration Connection Popups
+
+When a tool requires an unconnected integration:
+
+```tsx
+// handleElicitationUrl from useKontext opens a popup for the specific integration
+handleElicitationUrl(connectUrl);
 ```
 
 ### useKontextContext
@@ -189,6 +230,7 @@ export class MyAgent extends withKontext(Agent) {
 
 - `kontextTools(): Promise<ToolSet>` - Returns Kontext tools as executable AI SDK tools
 - `kontextSystemPrompt: string` - Generated system prompt describing available tools
+- `createMcpOAuthProvider(callbackUrl: string)` - Creates an OAuth provider for custom callback handling
 - Auto-handles OAuth callbacks and MCP connection lifecycle
 - Manages Durable Object storage for tokens
 - Broadcasts MCP state updates to connected clients
@@ -218,6 +260,13 @@ import { DurableObjectKontextStorage } from "@kontext-dev/js-sdk/cloudflare";
 const storage = new DurableObjectKontextStorage(ctx.storage);
 ```
 
+### Lifecycle Hooks
+
+`withKontext` integrates at three Agent lifecycle points:
+1. **Connection handling** — OAuth redirects
+2. **Startup** — Configuration initialization
+3. **Request delegation** — MCP transport and OAuth callbacks
+
 ### Environment Variables
 
 Set `KONTEXT_CLIENT_ID` in your `wrangler.toml`:
@@ -225,6 +274,8 @@ Set `KONTEXT_CLIENT_ID` in your `wrangler.toml`:
 ```toml
 [vars]
 KONTEXT_CLIENT_ID = "your-app-client-id"
+# Optional: override API base URL
+# KONTEXT_SERVER_URL = "https://custom-api.example.com"
 ```
 
 ---
@@ -285,3 +336,14 @@ interface UseKontextAgentReturn<State> {
 ```
 
 `useKontextAgent` wraps `useAgent` and automatically pipes `onMcpUpdate` through the `KontextProvider` context, handling OAuth popups and elicitation URLs transparently.
+
+---
+
+## Peer Dependencies
+
+| Framework | Required Packages |
+|-----------|-------------------|
+| React | `react` (^18.0.0 or ^19.0.0) |
+| Vercel AI | `ai` (^4.0.0) |
+| Cloudflare | `agents` (>=0.4.0) |
+| All | `@kontext-dev/js-sdk`, `@modelcontextprotocol/sdk` (^1.26.0) |

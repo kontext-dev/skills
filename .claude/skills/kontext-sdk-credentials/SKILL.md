@@ -73,7 +73,7 @@ Important: this skill is about **credential setup and retrieval**. It is not the
 
 ## Required inputs
 
-For **admin setup** with a service account:
+For **admin setup** with a service account (a machine identity for the Management API — create one in the dashboard at **Settings > Service Accounts**, or programmatically via `mgmt.serviceAccounts.create()` if you already have one):
 - `KONTEXT_API_BASE_URL` (optional, defaults to `https://api.kontext.dev`)
 - `MANAGEMENT_API_RESOURCE` (optional, defaults to `${KONTEXT_API_BASE_URL}/api/v1`)
 - `KONTEXT_SERVICE_ACCOUNT_CLIENT_ID`

@@ -31,6 +31,28 @@ const tools = await client.tools.list();
 const result = await client.tools.execute("tool-id", { query: "hello" });
 ```
 
+## Operating Modes
+
+**Single-endpoint mode** — connect to one MCP server:
+```typescript
+const client = createKontextClient({
+  clientId: "...",
+  redirectUri: "...",
+  url: "https://my-mcp-server.com/mcp",  // Direct connection
+  onAuthRequired: (url) => { /* ... */ },
+});
+```
+
+**Hybrid mode** — use Kontext gateway (aggregates tools from multiple integrations):
+```typescript
+const client = createKontextClient({
+  clientId: "...",
+  redirectUri: "...",
+  // No url — uses gateway automatically
+  onAuthRequired: (url) => { /* ... */ },
+});
+```
+
 ## Client Config
 
 ```typescript
@@ -82,6 +104,28 @@ interface KontextClient {
 }
 ```
 
+## Client Lifecycle
+
+```
+idle → connecting → ready
+                  → needs_auth → (user authenticates) → connecting → ready
+                  → failed
+```
+
+| State | Meaning |
+|-------|---------|
+| `idle` | Initial, not yet connected |
+| `connecting` | Connection in progress |
+| `ready` | Authenticated, tools available |
+| `needs_auth` | User login required |
+| `failed` | Connection error |
+
+Monitor state changes:
+```typescript
+const unsub = client.on("stateChange", (state) => console.log(state));
+client.on("error", (err) => console.error(err));
+```
+
 ## Auth Flow
 
 1. Call `client.connect()` - triggers `onAuthRequired` if not authenticated
@@ -89,33 +133,107 @@ interface KontextClient {
 3. On callback, call `client.auth.handleCallback(window.location.href)`
 4. Client state transitions to `"ready"`
 
+### Browser Redirect
+
 ```typescript
-// In your callback route handler:
+const client = createKontextClient({
+  clientId: "...",
+  redirectUri: "http://localhost:3000/callback",
+  storage: localStorageAdapter(),  // Required — survives page reload
+  onAuthRequired: (url) => window.location.href = url,
+});
+
+// On callback page:
 if (client.auth.isCallback(window.location.href)) {
   await client.auth.handleCallback(window.location.href);
 }
 ```
 
-## Orchestrator
-
-`createKontextOrchestrator` is a higher-level client that auto-discovers servers:
+### Popup Window
 
 ```typescript
-import { createKontextOrchestrator } from "@kontext-dev/js-sdk";
-
-const orchestrator = createKontextOrchestrator({
-  clientId: "your-app-client-id",
-  redirectUri: "http://localhost:3000/callback",
-  onAuthRequired: (url) => { window.location.href = url.toString(); },
-});
-
-await orchestrator.connect();
-const tools = await orchestrator.tools.list();
+onAuthRequired: (url) => {
+  const popup = window.open(url, "kontext-auth", "width=500,height=600");
+  const interval = setInterval(() => {
+    try {
+      if (popup?.location.href.startsWith(redirectUri)) {
+        client.auth.handleCallback(popup.location.href);
+        popup.close();
+        clearInterval(interval);
+      }
+    } catch {} // Cross-origin until redirect
+  }, 500);
+},
 ```
 
-Same interface as `KontextClient` but operates at the orchestration layer.
+### CLI / Node.js
 
-## Custom Storage
+> **CLI/Node.js warning:** `createKontextClient` is designed for browser environments. For CLI tools, Node.js scripts, or desktop agents that connect to the Kontext MCP gateway, use the manual OAuth approach in `references/public-oauth-mcp.md` instead. The SDK does not request `scope=mcp:invoke` (required by the gateway) and has auth retry issues in non-browser contexts.
+
+If you still need the SDK pattern in a Node.js context:
+
+```typescript
+import { createServer } from "http";
+import open from "open";
+
+onAuthRequired: (url) => {
+  const server = createServer(async (req, res) => {
+    const callbackUrl = `http://localhost:9876${req.url}`;
+    await client.auth.handleCallback(callbackUrl);
+    res.end("Authenticated! You can close this tab.");
+    server.close();
+  }).listen(9876);
+  open(url);  // Opens browser
+},
+```
+
+### Auth Methods
+
+| Method | Description |
+|--------|-------------|
+| `client.auth.isAuthenticated` | Boolean — active auth session |
+| `client.auth.signIn()` | Trigger OAuth flow |
+| `client.auth.signOut()` | Clear tokens, return to idle |
+| `client.auth.isCallback(url)` | Check if URL is OAuth callback |
+| `client.auth.handleCallback(url)` | Complete OAuth exchange |
+
+## Integration Management
+
+```typescript
+const integrations = await client.integrations.list();
+// Each: { id, name, connected, connectUrl? }
+```
+
+Handle missing connections automatically:
+```typescript
+const client = createKontextClient({
+  // ...
+  onIntegrationRequired: (integration) => {
+    if (integration.connectUrl) {
+      window.open(integration.connectUrl);
+    }
+  },
+});
+```
+
+## Storage
+
+### Built-in Options
+
+```typescript
+import { localStorageAdapter, sessionStorageAdapter } from "@kontext-dev/js-sdk/client";
+
+// Memory (default) — tokens lost on reload/exit
+createKontextClient({ /* ... */ });
+
+// localStorage — survives page reloads
+createKontextClient({ storage: localStorageAdapter(), /* ... */ });
+
+// sessionStorage — cleared when tab closes
+createKontextClient({ storage: sessionStorageAdapter(), /* ... */ });
+```
+
+### Custom Storage (Interface)
 
 Implement `KontextStorage` for custom token persistence (e.g., database, encrypted storage):
 
@@ -124,15 +242,50 @@ interface KontextStorage {
   getJson<T>(key: string): Promise<T | undefined>;
   setJson<T>(key: string, value: T | undefined): Promise<void>;
 }
+```
 
-const client = createKontextClient({
-  // ...
-  storage: {
-    async getJson(key) { return JSON.parse(await db.get(key)); },
-    async setJson(key, value) { await db.set(key, JSON.stringify(value)); },
-  },
+### Custom Storage (Database Example)
+
+```typescript
+function createDbStorage(userId: string): KontextStorage {
+  return {
+    async getJson(key: string) {
+      const row = await db.tokens.findUnique({ where: { userId, key } });
+      return row?.value ?? null;
+    },
+    async setJson(key: string, value: unknown) {
+      if (value === undefined) {
+        await db.tokens.delete({ where: { userId, key } });
+      } else {
+        await db.tokens.upsert({
+          where: { userId, key },
+          create: { userId, key, value },
+          update: { value },
+        });
+      }
+    },
+  };
+}
+```
+
+### Session Namespacing
+
+Isolate tokens for multiple users sharing storage:
+```typescript
+createKontextClient({
+  sessionKey: "user-alice",  // Default: "default"
+  // Storage keys: "kontext:<clientId>:user-alice:tokens"
 });
 ```
+
+### Storage Recommendations
+
+| Context | Storage |
+|---------|---------|
+| Browser SPA | `localStorageAdapter()` |
+| Server / multi-user | Database with user-scoped factory |
+| Testing / prototypes | Default memory |
+| Tab-scoped sessions | `sessionStorageAdapter()` |
 
 ## Connect Page
 
@@ -143,22 +296,3 @@ const { connectUrl, sessionId, expiresAt } = await client.getConnectPageUrl();
 // Redirect user to connectUrl
 ```
 
-## Low-Level MCP Client
-
-For direct MCP protocol access:
-
-```typescript
-import { KontextMcp } from "@kontext-dev/js-sdk/mcp";
-
-const mcp = new KontextMcp({
-  clientId: "your-app-client-id",
-  redirectUri: "http://localhost:3000/callback",
-  onAuthRequired: (url) => { window.location.href = url.toString(); },
-});
-
-const tools = await mcp.listTools();
-const result = await mcp.callTool("tool-name", { arg: "value" });
-
-// List runtime integrations with connection status
-const integrations = await mcp.listRuntimeIntegrations();
-```

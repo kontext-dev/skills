@@ -35,7 +35,7 @@ Do not drift into the server SDK retrieval flow in this skill. If the user also 
 
 ## Required credentials
 
-This skill requires a **service account** for the Kontext Management API.
+This skill requires a **service account** for the Kontext Management API. A service account is a machine identity that authenticates via OAuth2 client credentials — create one in the dashboard at **Settings > Service Accounts** (requires admin/owner role), or programmatically via `mgmt.serviceAccounts.create()` if you already have one.
 
 Read these from the environment:
 - `KONTEXT_SERVICE_ACCOUNT_CLIENT_ID`
