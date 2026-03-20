@@ -162,6 +162,7 @@ See [patterns.md](references/patterns.md) for concrete examples.
 
 ## References
 
-- **Architecture diagram**: See [architecture.md](references/architecture.md)
-- **Integration patterns**: See [patterns.md](references/patterns.md)
+- **Foundations**: See [foundations.md](references/foundations.md) — why agents need credentials, how teams solve it today (4 anti-patterns), where it breaks (6 failure modes), and the secure agent architecture
+- **Architecture**: See [architecture.md](references/architecture.md) — three-layer stack, core objects, 3-layer authorization model, control plane vs data plane
+- **Integration patterns**: See [patterns.md](references/patterns.md) — credential-free skills, user authorization flow, multi-integration patterns
 - **Full docs**: https://docs.kontext.dev

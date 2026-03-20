@@ -119,3 +119,49 @@ const tools = await kontext.listTools();
 const result = await kontext.callTool('github_list_repos', { owner: 'acme' });
 // → Every call logged, scoped to what user authorized
 ```
+
+## Control Plane vs Data Plane
+
+The **control plane** is Kontext's hosted service. It manages identity, policy, and credential lifecycle — decides whether a request is allowed and which credentials to issue.
+
+The **data plane** is where tool execution happens:
+
+- **Gateway mode**: Kontext proxies requests to remote MCP servers, injecting credentials automatically
+- **Credential-only mode**: Kontext brokers credentials, but your server makes the API calls directly
+
+## Identity & Access Structure
+
+```
+Organization
+ ├── Users         (identity from your existing SSO)
+ └── Applications  (identity from Kontext)
+
+User → Connection → Integration
+Application → Capability → Integration (using User's Connection)
+Policy → Org Layer + User Layer + Application Layer
+```
+
+## Core Objects
+
+| Object | Description |
+|--------|-------------|
+| **Organization** | Top-level tenant. Provides isolation — users, apps, connections, and policies in one org cannot affect another. Maps to a company, team, or environment. |
+| **User** | Human authenticated via external SSO. Establishes Connections to Integrations via OAuth. Sets delegation policies. Appears in Audit Trail as the delegating principal. |
+| **Application** | Non-human agent identity issued by Kontext. Has a unique Client ID. Authenticates users via OAuth to receive access tokens. Invokes Capabilities using the user's Connections. |
+| **Integration** | External service (GitHub, Slack, Linear, Stripe, custom APIs). Kontext brokers tokens issued by the integration's auth server — it does not issue them itself. |
+| **Capability** | Atomic unit of access control (e.g., `github:create_issue`, `slack:send_message`). Discovered from MCP server tool definitions. Each invocation is logged. |
+| **Connection** | A user's authenticated link to an integration. Created via OAuth flow or API key. Credential is issued by the integration's auth server, stored securely by Kontext, injected into app requests. |
+| **Policy** | Rules across three layers (org, user, application). All three must allow. Explicit deny overrides allow at the same level. |
+| **Audit Trail** | Immutable log of every capability invocation — which app, on whose behalf, which capability, on which integration, timestamp, success/failure, and policy evaluation. |
+
+## The 3-Layer Authorization Model
+
+Access requires permission at all three layers:
+
+| Layer | Set by | Example |
+|-------|--------|---------|
+| **Org** | Admins | "Engineering org can use GitHub and Linear" |
+| **User** | Users (or inherited from SSO roles) | "My applications can create issues but not delete repos" |
+| **Application** | Per-application by owner or admin | "PR-Bot can only access `acme/frontend`" |
+
+All three layers must allow. Any explicit deny at any layer blocks the request and the SDK throws `kontext_policy_denied`.
