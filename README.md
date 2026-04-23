@@ -5,7 +5,7 @@ Skills for Kontext.dev workflows and SDK integration.
 ## Install
 
 ```bash
-npx skills add kontext-dev/skills
+npx skills add kontext-security/skills
 ```
 
 Auto-detects your AI harness (Claude Code, Cursor, Gemini CLI, etc.) and installs to the right location.
