@@ -76,6 +76,7 @@ chmodSync(envFile, 0o600);
 ensureGitignore(envFile);
 
 const state = {
+  setupMode: handoff.setupMode || (handoff.selectedProviderHandle ? "credential_injection" : "telemetry_only"),
   selectedProviderHandle: handoff.selectedProviderHandle || null,
   selectedProviderDisplayName: handoff.selectedProviderDisplayName || null,
   runtimeAppName: handoff.runtimeAppName || null,
@@ -89,7 +90,9 @@ writeFileSync(".kontext-setup-state.json", `${JSON.stringify(state, null, 2)}\n`
   mode: 0o600,
 });
 
-console.log(`\nUpdated ${envFile} for provider: ${state.selectedProviderHandle || "unknown"}`);
+console.log(
+  `\nUpdated ${envFile} for ${state.setupMode === "telemetry_only" ? "tool/request tracing" : `provider: ${state.selectedProviderHandle || "unknown"}`}`,
+);
 console.log("Return to the agent. It will patch and verify the Go repo now.");
 
 async function waitForLocalHandoff(token) {

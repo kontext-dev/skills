@@ -80,7 +80,7 @@ Run this as a long-running command:
 node <this-skill-dir>/scripts/run-local-setup.mjs
 ```
 
-Relay the printed setup URL to the user. Do not open the URL yourself. Do not use Playwright, browser-use, computer-use, `open`, or any browser automation for this step unless the user explicitly asks you to drive the browser in that same message. Do not ask the user to copy secrets. The browser page owns provider creation/selection and sends the runtime env values back through the setup session after the user clicks the finish button. The browser must not post to localhost.
+Relay the printed setup URL to the user. Do not open the URL yourself. Do not use Playwright, browser-use, computer-use, `open`, or any browser automation for this step unless the user explicitly asks you to drive the browser in that same message. Do not ask the user to copy secrets. The browser page owns provider creation/selection when the user wants credential injection. Provider setup is optional: if the user chooses tracing only, the browser sends the runtime env values without a selected provider. The browser must not post to localhost.
 
 Wait until the command exits successfully. It must create:
 
@@ -103,9 +103,10 @@ The patcher owns:
 
 - adding `github.com/kontext-security/kontext-go@v0.3.0`
 - adding the env file and `.kontext-setup-state.json` to `.gitignore`
-- replacing direct Anthropic env-key usage
+- replacing direct Anthropic env-key usage when credential injection is enabled
+- preserving existing Anthropic env-key usage when tracing-only setup is selected
 - adding `kontext.Start(...)`
-- using the exact selected provider handle
+- using the exact selected provider handle when credential injection is enabled
 - adding request telemetry
 - wrapping the supported tool boundary
 - running `gofmt`, `go mod tidy`, and `go test ./...`
@@ -114,10 +115,16 @@ If the patcher fails, report the exact unsupported shape. Do not guess another r
 
 ### 4. Verify Runtime Shape
 
-Run:
+For credential-injection setup, run:
 
 ```bash
 env -u ANTHROPIC_API_KEY sh -c 'set -a; . "$(node -e "console.log(JSON.parse(require(\"fs\").readFileSync(\".kontext-setup-state.json\", \"utf8\")).envFile || \".env\")")"; set +a; go run ./cmd/agent'
+```
+
+For tracing-only setup, keep the repo's existing Anthropic environment available and run:
+
+```bash
+sh -c 'set -a; . "$(node -e "console.log(JSON.parse(require(\"fs\").readFileSync(\".kontext-setup-state.json\", \"utf8\")).envFile || \".env\")")"; set +a; go run ./cmd/agent'
 ```
 
 If this command would print sensitive values, stop. Normal agent output is okay; the env file itself must not be printed.
@@ -129,12 +136,13 @@ Final response must include no secrets and must be factual:
 ```text
 Kontext is installed.
 
-Provider: <selected-provider-handle>
+Mode: <credential_injection or telemetry_only>
+Provider: <selected-provider-handle or none>
 Runtime env: <env file from .kontext-setup-state.json>
 Files patched:
 - <paths>
 Tests: passed
-Runtime: started without ANTHROPIC_API_KEY
+Runtime: <credential injection started without ANTHROPIC_API_KEY, or tracing-only started with the repo's existing provider env>
 ```
 
 ## Privacy Rules

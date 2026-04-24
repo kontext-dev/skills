@@ -9,8 +9,9 @@ if (!existsSync(statePath)) {
 }
 
 const setupState = JSON.parse(readFileSync(statePath, "utf8"));
+const setupMode = setupState.setupMode || (setupState.selectedProviderHandle ? "credential_injection" : "telemetry_only");
 const providerHandle = setupState.selectedProviderHandle;
-if (!providerHandle || typeof providerHandle !== "string") {
+if (setupMode === "credential_injection" && (!providerHandle || typeof providerHandle !== "string")) {
   console.error("Setup did not record a selected provider handle.");
   process.exit(2);
 }
@@ -40,7 +41,7 @@ execFileSync("go", ["get", "github.com/kontext-security/kontext-go@v0.3.0"], {
 });
 
 ensureGitignore();
-patchFile(target, providerHandle);
+patchFile(target, providerHandle, setupMode);
 
 execFileSync("gofmt", ["-w", target], { stdio: "inherit" });
 execFileSync("go", ["mod", "tidy"], { stdio: "inherit" });
@@ -50,7 +51,8 @@ console.log(
   JSON.stringify(
     {
       patchedFiles: [target],
-      providerHandle,
+      setupMode,
+      providerHandle: providerHandle || null,
       runtimeEnvFile: setupState.envFile || ".env",
       tests: "passed",
     },
@@ -59,23 +61,30 @@ console.log(
   ),
 );
 
-function patchFile(file, handle) {
+function patchFile(file, handle, mode) {
   let text = readFileSync(file, "utf8");
   if (text.includes("github.com/kontext-security/kontext-go")) {
-    writeFileSync(file, text.replace(/const anthropicProviderHandle = "[^"]+"/, `const anthropicProviderHandle = "${handle}"`));
+    if (mode === "credential_injection") {
+      text = text.replace(/const anthropicProviderHandle = "[^"]+"/, `const anthropicProviderHandle = "${handle}"`);
+    }
+    writeFileSync(file, text);
     return;
   }
 
-  text = patchImports(text);
-  text = insertProviderConst(text, handle);
-  text = patchRunFunction(text);
-  text = patchClient(text);
+  text = patchImports(text, mode);
+  if (mode === "credential_injection") {
+    text = insertProviderConst(text, handle);
+  }
+  text = patchRunFunction(text, mode);
+  text = patchClient(text, mode);
   text = patchToolBoundary(text);
   writeFileSync(file, text);
 }
 
-function patchImports(text) {
-  text = text.replace(/\n\s*"github\.com\/anthropics\/anthropic-sdk-go\/option"\n/, "\n");
+function patchImports(text, mode) {
+  if (mode === "credential_injection") {
+    text = text.replace(/\n\s*"github\.com\/anthropics\/anthropic-sdk-go\/option"\n/, "\n");
+  }
   const importBlock = text.match(/import\s*\(([\s\S]*?)\)/);
   if (!importBlock) {
     throw new Error("Only import blocks are supported for v1 Go patching.");
@@ -96,22 +105,27 @@ function insertProviderConst(text, handle) {
   return text.replace(importBlock[0], `${importBlock[0]}\nconst anthropicProviderHandle = "${handle}"\n`);
 }
 
-function patchRunFunction(text) {
+function patchRunFunction(text, mode) {
   const marker = "func Run(ctx context.Context, prompt string) (string, error) {\n";
   if (!text.includes(marker)) {
     throw new Error("Supported v1 patching expects func Run(ctx context.Context, prompt string) (string, error).");
   }
   const serviceName = sanitizeServiceName(setupState.repoBasename || "go-agent");
+  const credentialsBlock =
+    mode === "credential_injection"
+      ? `\t\tCredentials: kontext.CredentialsConfig{
+\t\t\tMode:      kontext.CredentialModeProvide,
+\t\t\tProviders: []kontext.Provider{anthropicProviderHandle},
+\t\t},
+`
+      : "";
   const bootstrap = `${marker}\tkx, err := kontext.Start(ctx, kontext.Config{
 \t\tServiceName:  "${serviceName}",
 \t\tEnvironment:  "local",
 \t\tClientID:     os.Getenv("KONTEXT_CLIENT_ID"),
 \t\tClientSecret: os.Getenv("KONTEXT_CLIENT_SECRET"),
 \t\tURL:          os.Getenv("KONTEXT_URL"),
-\t\tCredentials: kontext.CredentialsConfig{
-\t\t\tMode:      kontext.CredentialModeProvide,
-\t\t\tProviders: []kontext.Provider{anthropicProviderHandle},
-\t\t},
+${credentialsBlock}
 \t})
 \tif err != nil {
 \t\treturn "", err
@@ -122,7 +136,16 @@ function patchRunFunction(text) {
   return text.replace(marker, bootstrap);
 }
 
-function patchClient(text) {
+function patchClient(text, mode) {
+  if (mode === "telemetry_only") {
+    return text.replace(
+      /anthropic\.NewClient\(\s*option\.WithAPIKey\(os\.Getenv\("ANTHROPIC_API_KEY"\)\),?\s*\)/,
+      `anthropic.NewClient(
+\t\toption.WithAPIKey(os.Getenv("ANTHROPIC_API_KEY")),
+\t\tkxanthropic.WithRequestTelemetry(kx),
+\t)`,
+    );
+  }
   return text.replace(
     /anthropic\.NewClient\(\s*option\.WithAPIKey\(os\.Getenv\("ANTHROPIC_API_KEY"\)\),?\s*\)/,
     `anthropic.NewClient(
