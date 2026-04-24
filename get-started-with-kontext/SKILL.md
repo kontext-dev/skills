@@ -27,13 +27,27 @@ V1 supports macOS only.
    - If `kontext` exists in `PATH`, run `kontext --help` or `kontext version` if supported.
    - Otherwise install with the official Homebrew path:
      `brew install kontext-security/tap/kontext`
-4. End by running, or instructing the user to run:
+4. Create a convenient Claude Code launcher without editing shell rc files:
 
 ```bash
-kontext start --agent claude
+mkdir -p .kontext/bin
+cat > .kontext/bin/claude <<'SH'
+#!/bin/sh
+exec kontext start --agent claude "$@"
+SH
+chmod +x .kontext/bin/claude
 ```
 
-Do not patch Go code. Do not install aliases. Do not edit shell rc files.
+5. End by saying:
+
+```text
+Claude Code is ready through Kontext.
+
+Run Claude Code in this repo with:
+PATH="$PWD/.kontext/bin:$PATH" claude
+```
+
+Do not patch Go code. Do not edit shell rc files.
 
 ## Long-running Go agent in this repo
 
@@ -77,16 +91,16 @@ Run this as a long-running command:
 node <this-skill-dir>/scripts/run-local-setup.mjs
 ```
 
-Relay the printed setup URL to the user. Do not ask them to copy secrets. The browser page owns provider creation/selection and sends `.env.kontext` back to the local receiver after the user clicks the finish button.
+Relay the printed setup URL to the user. Do not ask them to copy secrets. The browser page owns provider creation/selection and sends the runtime env values back to the local receiver after the user clicks the finish button.
 
 Wait until the command exits successfully. It must create:
 
 ```text
-.env.kontext
+.env or the repo's existing env file
 .kontext-setup-state.json
 ```
 
-Never print `.env.kontext`, `KONTEXT_CLIENT_SECRET`, or command output containing secret values.
+Never print the env file, `KONTEXT_CLIENT_SECRET`, or command output containing secret values.
 
 ### 3. Deterministic Go Patch
 
@@ -99,7 +113,7 @@ node <this-skill-dir>/scripts/patch-go-anthropic.mjs
 The patcher owns:
 
 - adding `github.com/kontext-security/kontext-go@v0.2.0`
-- adding `.env`, `.env.*`, and `.kontext-setup-state.json` to `.gitignore`
+- adding the env file and `.kontext-setup-state.json` to `.gitignore`
 - replacing direct Anthropic env-key usage
 - adding `kontext.Start(...)`
 - using the exact selected provider handle
@@ -114,7 +128,7 @@ If the patcher fails, report the exact unsupported shape. Do not guess another r
 Run:
 
 ```bash
-env -u ANTHROPIC_API_KEY sh -c 'set -a; . ./.env.kontext; set +a; go run ./cmd/agent'
+env -u ANTHROPIC_API_KEY sh -c 'set -a; . "$(node -e "console.log(JSON.parse(require(\"fs\").readFileSync(\".kontext-setup-state.json\", \"utf8\")).envFile || \".env\")")"; set +a; go run ./cmd/agent'
 ```
 
 If this command would print sensitive values, stop. Normal agent output is okay; the env file itself must not be printed.
@@ -127,7 +141,7 @@ Final response must include no secrets and must be factual:
 Kontext is installed.
 
 Provider: <selected-provider-handle>
-Runtime env: .env.kontext
+Runtime env: <env file from .kontext-setup-state.json>
 Files patched:
 - <paths>
 Tests: passed
@@ -137,7 +151,7 @@ Runtime: started without ANTHROPIC_API_KEY
 ## Privacy Rules
 
 - Never print `KONTEXT_CLIENT_SECRET`.
-- Never paste `.env.kontext` into the transcript.
-- Never commit `.env.kontext`.
+- Never paste env-file contents into the transcript.
+- Never commit runtime env files.
 - Never ask the user to paste secrets into chat.
 - Browser-to-local env handoff requires the user clicking the explicit finish button.

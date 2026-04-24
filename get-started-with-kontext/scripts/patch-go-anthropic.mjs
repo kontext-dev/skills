@@ -51,7 +51,7 @@ console.log(
     {
       patchedFiles: [target],
       providerHandle,
-      runtimeEnvFile: ".env.kontext",
+      runtimeEnvFile: setupState.envFile || ".env",
       tests: "passed",
     },
     null,
@@ -151,7 +151,13 @@ function ensureGitignore() {
     text = "";
   }
   const lines = text.split(/\r?\n/).filter((line, index, arr) => !(line === "" && index === arr.length - 1));
-  for (const line of [".env", ".env.*", "!.env.example", ".kontext-setup-state.json"]) {
+  for (const line of [
+    setupState.envFile || ".env",
+    ".env",
+    ".env.*",
+    "!.env.example",
+    ".kontext-setup-state.json",
+  ]) {
     if (!lines.includes(line)) lines.push(line);
   }
   writeFileSync(".gitignore", `${lines.join("\n")}\n`);

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { basename } from "node:path";
 
@@ -95,20 +95,20 @@ const server = createServer(async (req, res) => {
         }
       }
 
-      const envText = [
-        `KONTEXT_CLIENT_ID=${env.KONTEXT_CLIENT_ID}`,
-        `KONTEXT_CLIENT_SECRET=${env.KONTEXT_CLIENT_SECRET}`,
-        `KONTEXT_URL=${env.KONTEXT_URL}`,
-        "",
-      ].join("\n");
-      writeFileSync(".env.kontext", envText, { mode: 0o600 });
-      chmodSync(".env.kontext", 0o600);
-      ensureGitignore();
+      const envFile = selectEnvFile();
+      upsertEnvFile(envFile, {
+        KONTEXT_CLIENT_ID: env.KONTEXT_CLIENT_ID,
+        KONTEXT_CLIENT_SECRET: env.KONTEXT_CLIENT_SECRET,
+        KONTEXT_URL: env.KONTEXT_URL,
+      });
+      chmodSync(envFile, 0o600);
+      ensureGitignore(envFile);
 
       const state = {
         selectedProviderHandle: payload.selectedProviderHandle || null,
         selectedProviderDisplayName: payload.selectedProviderDisplayName || null,
         runtimeAppName: payload.runtimeAppName || null,
+        envFile,
         repoBasename,
         gitRemoteHost: parsed.host,
         gitRemotePath: parsed.path,
@@ -120,7 +120,7 @@ const server = createServer(async (req, res) => {
 
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end("<h1>Kontext setup saved.</h1><p>Return to your agent.</p>");
-      console.log(`\nSaved .env.kontext for provider: ${state.selectedProviderHandle || "unknown"}`);
+      console.log(`\nUpdated ${envFile} for provider: ${state.selectedProviderHandle || "unknown"}`);
       console.log("Return to the agent. It will patch and verify the Go repo now.");
       server.close(() => process.exit(0));
     } catch (err) {
@@ -149,7 +149,7 @@ server.listen(0, "127.0.0.1", () => {
   console.log("Open this setup URL in your browser:");
   console.log(url.toString());
   console.log("");
-  console.log("Waiting for the browser to save .env.kontext...");
+  console.log("Waiting for the browser to save the runtime env file...");
 });
 
 const timer = setTimeout(() => {
@@ -158,7 +158,37 @@ const timer = setTimeout(() => {
 }, timeoutMs);
 timer.unref?.();
 
-function ensureGitignore() {
+function selectEnvFile() {
+  for (const candidate of [".env", ".env.local", ".env.development", ".env.kontext"]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return ".env";
+}
+
+function upsertEnvFile(path, values) {
+  let text = "";
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    text = "";
+  }
+  const lines = text.split(/\r?\n/);
+  const seen = new Set();
+  const next = lines
+    .filter((line, index) => !(line === "" && index === lines.length - 1))
+    .map((line) => {
+      const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=/);
+      if (!match || !(match[1] in values)) return line;
+      seen.add(match[1]);
+      return `${match[1]}=${values[match[1]]}`;
+    });
+  for (const [key, value] of Object.entries(values)) {
+    if (!seen.has(key)) next.push(`${key}=${value}`);
+  }
+  writeFileSync(path, `${next.join("\n")}\n`, { mode: 0o600 });
+}
+
+function ensureGitignore(envFile) {
   let text = "";
   try {
     text = readFileSync(".gitignore", "utf8");
@@ -166,7 +196,7 @@ function ensureGitignore() {
     text = "";
   }
   const lines = text.split(/\r?\n/).filter((line, index, arr) => !(line === "" && index === arr.length - 1));
-  for (const line of [".env", ".env.*", "!.env.example", ".kontext-setup-state.json"]) {
+  for (const line of [envFile, ".env", ".env.*", "!.env.example", ".kontext-setup-state.json"]) {
     if (!lines.includes(line)) lines.push(line);
   }
   writeFileSync(".gitignore", `${lines.join("\n")}\n`);
