@@ -84,15 +84,20 @@ Planned changes:
 node <this-skill-dir>/scripts/setup-url.mjs
 ```
 
-5. Open the printed browser URL. The browser page handles login, runtime app create/repair, provider selection, provider attach, and one-time secret reveal.
+5. Do not open the printed browser URL yourself. Do not use Playwright, browser-use, computer-use, or `open` for this step unless the user explicitly asks you to drive the browser. Show the URL to the user and ask them to open it.
 6. Tell the user:
 
 ```text
-Browser setup is open. Create or select the custom provider this agent should use, then choose “Use for this agent”.
+Open this setup URL in your browser:
+<browserUrl>
+
+Create or select the custom provider this agent should use, then choose “Use for this agent”.
 Copy the environment variables from the browser page into the runtime environment for your Go agent.
+
+When the browser page says setup is complete, come back and say: done.
 ```
 
-7. Wait until setup state reports a selected provider handle. Never copy `KONTEXT_CLIENT_SECRET` into the transcript, files, logs, or snapshots.
+7. Wait for the user to say setup is done, then check setup state for the selected provider handle. Never copy `KONTEXT_CLIENT_SECRET` into the transcript, files, logs, or snapshots.
 8. Add the Kontext Go module with:
 
 ```bash
