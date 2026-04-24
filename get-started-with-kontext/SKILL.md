@@ -100,7 +100,7 @@ Open this setup URL in your browser:
 <browserUrl>
 
 Create or select the suggested provider for this agent, then choose “Use for this agent”.
-After provider selection, copy the environment variables from the browser page into your runtime secret store.
+After provider selection, save the `.env.kontext` file from the browser page for local testing, or put the same values into your runtime secret store.
 
 When the browser page says setup is complete, come back and say: done.
 ```
@@ -112,7 +112,17 @@ When the browser page says setup is complete, come back and say: done.
 go get github.com/kontext-security/kontext-go@v0.2.0
 ```
 
-9. Patch with the exact selected handle:
+9. Ensure local env files are ignored by git. If `.gitignore` exists, add these lines if missing:
+
+```gitignore
+.env
+.env.*
+!.env.example
+```
+
+Do not create `.env.kontext` yourself and do not ask the user to paste `KONTEXT_CLIENT_SECRET` into the chat. The browser page is the only place that reveals the secret.
+
+10. Patch with the exact selected handle:
 
 ```go
 kx, err := kontext.Start(ctx, kontext.Config{
@@ -133,10 +143,10 @@ client := anthropic.NewClient(
 )
 ```
 
-10. Add `TrackPrompt(...)` only when the prompt variable is obvious.
-11. Wrap the existing tool boundary with `ObserveTool(...)` or `WrapTools(...)`.
-12. Preserve the existing Anthropic loop and tool semantics.
-13. Run:
+11. Add `TrackPrompt(...)` only when the prompt variable is obvious.
+12. Wrap the existing tool boundary with `ObserveTool(...)` or `WrapTools(...)`.
+13. Preserve the existing Anthropic loop and tool semantics.
+14. Run:
 
 ```bash
 gofmt -w <changed-go-files>
@@ -154,9 +164,10 @@ Configured:
 - Tests: passed/failed/skipped
 
 Next:
-1. Copy the environment variables from the browser setup page.
-2. Start your Go agent with those variables set.
-3. Do not set ANTHROPIC_API_KEY for this flow.
+1. Save the browser `.env.kontext` block in `.env.kontext` or put the values in your runtime secret store.
+2. For local testing, run: `set -a; source .env.kontext; set +a; go run ./cmd/agent`
+3. Do not commit `.env.kontext`.
+4. Do not set ANTHROPIC_API_KEY for this flow.
 ```
 
 ## Privacy rules
