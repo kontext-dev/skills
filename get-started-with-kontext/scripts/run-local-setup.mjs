@@ -2,7 +2,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
 import { basename } from "node:path";
 
 const appUrl = (process.env.KONTEXT_APP_URL || "https://app.kontext.security").replace(/\/$/, "");
@@ -54,111 +53,62 @@ const repoFingerprint = createHash("sha256")
   .update(`${remote}\n${repoBasename}`)
   .digest("hex")
   .slice(0, 32);
-const nonce = randomBytes(24).toString("base64url");
-const server = createServer(async (req, res) => {
-  const origin = req.headers.origin;
-  res.setHeader("Access-Control-Allow-Origin", origin || "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  res.setHeader("Access-Control-Allow-Private-Network", "true");
-  res.setHeader("Access-Control-Max-Age", "600");
-  if (req.method === "OPTIONS") {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
-  if (req.method !== "POST" || req.url !== "/kontext/setup/complete") {
-    res.writeHead(404);
-    res.end("not found");
-    return;
-  }
+const localHandoffToken = randomBytes(32).toString("base64url");
+const url = new URL(`${appUrl}/get-started/setup`);
+url.searchParams.set("repoFingerprint", repoFingerprint);
+url.searchParams.set("repoBasename", repoBasename);
+url.searchParams.set("gitRemoteHost", parsed.host);
+url.searchParams.set("gitRemotePath", parsed.path);
+url.searchParams.set("providerSuggestions", JSON.stringify(scanProviderSuggestions()));
+url.searchParams.set("localHandoffToken", localHandoffToken);
 
-  let body = "";
-  req.setEncoding("utf8");
-  req.on("data", (chunk) => {
-    body += chunk;
-    if (body.length > 64_000) req.destroy();
-  });
-  req.on("end", () => {
-    try {
-      const payload = JSON.parse(body);
-      if (payload.nonce !== nonce) {
-        res.writeHead(403);
-        res.end("invalid nonce");
-        return;
-      }
-      const env = payload.runtimeEnv || {};
-      const required = ["KONTEXT_CLIENT_ID", "KONTEXT_CLIENT_SECRET", "KONTEXT_URL"];
-      for (const key of required) {
-        if (typeof env[key] !== "string" || env[key].trim() === "") {
-          res.writeHead(400);
-          res.end(`missing ${key}`);
-          return;
-        }
-      }
+console.log("Open this setup URL in your browser:");
+console.log(url.toString());
+console.log("");
+console.log("Waiting for the browser setup to hand runtime credentials back through Kontext...");
 
-      const envFile = selectEnvFile();
-      upsertEnvFile(envFile, {
-        KONTEXT_CLIENT_ID: env.KONTEXT_CLIENT_ID,
-        KONTEXT_CLIENT_SECRET: env.KONTEXT_CLIENT_SECRET,
-        KONTEXT_URL: env.KONTEXT_URL,
-      });
-      chmodSync(envFile, 0o600);
-      ensureGitignore(envFile);
+const handoff = await waitForLocalHandoff(localHandoffToken);
+const envFile = selectEnvFile();
+upsertEnvFile(envFile, handoff.runtimeEnv);
+chmodSync(envFile, 0o600);
+ensureGitignore(envFile);
 
-      const state = {
-        selectedProviderHandle: payload.selectedProviderHandle || null,
-        selectedProviderDisplayName: payload.selectedProviderDisplayName || null,
-        runtimeAppName: payload.runtimeAppName || null,
-        envFile,
-        repoBasename,
-        gitRemoteHost: parsed.host,
-        gitRemotePath: parsed.path,
-        updatedAt: new Date().toISOString(),
-      };
-      writeFileSync(".kontext-setup-state.json", `${JSON.stringify(state, null, 2)}\n`, {
-        mode: 0o600,
-      });
+const state = {
+  selectedProviderHandle: handoff.selectedProviderHandle || null,
+  selectedProviderDisplayName: handoff.selectedProviderDisplayName || null,
+  runtimeAppName: handoff.runtimeAppName || null,
+  envFile,
+  repoBasename,
+  gitRemoteHost: parsed.host,
+  gitRemotePath: parsed.path,
+  updatedAt: new Date().toISOString(),
+};
+writeFileSync(".kontext-setup-state.json", `${JSON.stringify(state, null, 2)}\n`, {
+  mode: 0o600,
+});
 
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end("<h1>Kontext setup saved.</h1><p>Return to your agent.</p>");
-      console.log(`\nUpdated ${envFile} for provider: ${state.selectedProviderHandle || "unknown"}`);
-      console.log("Return to the agent. It will patch and verify the Go repo now.");
-      server.close(() => process.exit(0));
-    } catch (err) {
-      res.writeHead(400);
-      res.end(err instanceof Error ? err.message : "invalid request");
+console.log(`\nUpdated ${envFile} for provider: ${state.selectedProviderHandle || "unknown"}`);
+console.log("Return to the agent. It will patch and verify the Go repo now.");
+
+async function waitForLocalHandoff(token) {
+  const deadline = Date.now() + timeoutMs;
+  const pollUrl = new URL(`${appUrl}/api/get-started/setup-sessions/local-handoff`);
+  pollUrl.searchParams.set("repoFingerprint", repoFingerprint);
+  pollUrl.searchParams.set("token", token);
+
+  while (Date.now() < deadline) {
+    const res = await fetch(pollUrl, { cache: "no-store" });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || `Setup handoff failed with status ${res.status}`);
     }
-  });
-});
-
-server.listen(0, "localhost", () => {
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    console.error("Failed to start local setup receiver.");
-    process.exit(1);
+    const body = await res.json();
+    if (body.status === "ready") return body;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
   }
-  const callbackUrl = `http://localhost:${address.port}/kontext/setup/complete`;
-  const url = new URL(`${appUrl}/get-started/setup`);
-  url.searchParams.set("repoFingerprint", repoFingerprint);
-  url.searchParams.set("repoBasename", repoBasename);
-  url.searchParams.set("gitRemoteHost", parsed.host);
-  url.searchParams.set("gitRemotePath", parsed.path);
-  url.searchParams.set("providerSuggestions", JSON.stringify(scanProviderSuggestions()));
-  url.searchParams.set("localCallbackUrl", callbackUrl);
-  url.searchParams.set("localCallbackNonce", nonce);
 
-  console.log("Open this setup URL in your browser:");
-  console.log(url.toString());
-  console.log("");
-  console.log("Waiting for the browser to save the runtime env file...");
-});
-
-const timer = setTimeout(() => {
-  console.error("Timed out waiting for browser setup.");
-  server.close(() => process.exit(1));
-}, timeoutMs);
-timer.unref?.();
+  throw new Error("Timed out waiting for browser setup.");
+}
 
 function selectEnvFile() {
   for (const candidate of [".env", ".env.local", ".env.development", ".env.kontext"]) {

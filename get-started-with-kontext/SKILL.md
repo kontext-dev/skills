@@ -91,7 +91,7 @@ Run this as a long-running command:
 node <this-skill-dir>/scripts/run-local-setup.mjs
 ```
 
-Relay the printed setup URL to the user. Do not open the URL yourself. Do not use Playwright, browser-use, computer-use, `open`, or any browser automation for this step unless the user explicitly asks you to drive the browser in that same message. Do not ask the user to copy secrets. The browser page owns provider creation/selection and sends the runtime env values back to the local receiver after the user clicks the finish button.
+Relay the printed setup URL to the user. Do not open the URL yourself. Do not use Playwright, browser-use, computer-use, `open`, or any browser automation for this step unless the user explicitly asks you to drive the browser in that same message. Do not ask the user to copy secrets. The browser page owns provider creation/selection and sends the runtime env values back through the setup session after the user clicks the finish button. The browser must not post to localhost.
 
 Wait until the command exits successfully. It must create:
 
@@ -154,4 +154,4 @@ Runtime: started without ANTHROPIC_API_KEY
 - Never paste env-file contents into the transcript.
 - Never commit runtime env files.
 - Never ask the user to paste secrets into chat.
-- Browser-to-local env handoff requires the user clicking the explicit finish button.
+- Local env handoff requires the user clicking the explicit finish button in the browser.
