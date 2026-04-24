@@ -132,13 +132,13 @@ const server = createServer(async (req, res) => {
   });
 });
 
-server.listen(0, "127.0.0.1", () => {
+server.listen(0, "localhost", () => {
   const address = server.address();
   if (!address || typeof address === "string") {
     console.error("Failed to start local setup receiver.");
     process.exit(1);
   }
-  const callbackUrl = `http://127.0.0.1:${address.port}/kontext/setup/complete`;
+  const callbackUrl = `http://localhost:${address.port}/kontext/setup/complete`;
   const url = new URL(`${appUrl}/get-started/setup`);
   url.searchParams.set("repoFingerprint", repoFingerprint);
   url.searchParams.set("repoBasename", repoBasename);
