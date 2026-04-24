@@ -56,7 +56,7 @@ Use this branch only for Anthropic Go SDK agents that run unattended from a repo
 Explain the local inspection once:
 
 ```text
-I’m going to inspect this Go repo, open one browser setup link, then patch and verify it automatically. I do not read or print secret values.
+I’m going to inspect this Go repo, print one setup link for you to open, then patch and verify it after the browser setup finishes. I do not read or print secret values.
 ```
 
 Then run the flow exactly. Do not freehand patch Go code.
@@ -91,7 +91,7 @@ Run this as a long-running command:
 node <this-skill-dir>/scripts/run-local-setup.mjs
 ```
 
-Relay the printed setup URL to the user. Do not ask them to copy secrets. The browser page owns provider creation/selection and sends the runtime env values back to the local receiver after the user clicks the finish button.
+Relay the printed setup URL to the user. Do not open the URL yourself. Do not use Playwright, browser-use, computer-use, `open`, or any browser automation for this step unless the user explicitly asks you to drive the browser in that same message. Do not ask the user to copy secrets. The browser page owns provider creation/selection and sends the runtime env values back to the local receiver after the user clicks the finish button.
 
 Wait until the command exits successfully. It must create:
 
