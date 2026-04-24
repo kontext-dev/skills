@@ -198,22 +198,16 @@ function walk(dir, files = []) {
 function findCredentialEnvNames(text) {
   const names = new Set();
   for (const match of text.matchAll(/os\.Getenv\(\s*"([^"]+)"\s*\)/g)) {
-    if (isCredentialEnvName(match[1])) names.add(match[1]);
+    if (isSupportedCredentialEnvName(match[1])) names.add(match[1]);
   }
   for (const match of text.matchAll(/"([A-Z][A-Z0-9_]*(?:API_KEY|ACCESS_KEY_ID|SECRET_ACCESS_KEY|TOKEN))"/g)) {
-    if (isCredentialEnvName(match[1])) names.add(match[1]);
+    if (isSupportedCredentialEnvName(match[1])) names.add(match[1]);
   }
   return [...names];
 }
 
-function isCredentialEnvName(name) {
-  if (!name || name.startsWith("KONTEXT_")) return false;
-  return (
-    name.endsWith("_API_KEY") ||
-    name.endsWith("_TOKEN") ||
-    name === "AWS_ACCESS_KEY_ID" ||
-    name === "AWS_SECRET_ACCESS_KEY"
-  );
+function isSupportedCredentialEnvName(name) {
+  return name === "ANTHROPIC_API_KEY";
 }
 
 function providerSuggestionsFromCredentials(uses) {
@@ -233,29 +227,8 @@ function providerSuggestionsFromCredentials(uses) {
 }
 
 function providerSuggestionForEnv(envName) {
-  const known = [
-    [/^ANTHROPIC_API_KEY$/, "Anthropic", "anthropic"],
-    [/^OPENAI_API_KEY$/, "OpenAI", "openai"],
-    [/^(GOOGLE|GEMINI)_API_KEY$/, "Google Gemini", "google-gemini"],
-    [/^GROQ_API_KEY$/, "Groq", "groq"],
-    [/^MISTRAL_API_KEY$/, "Mistral", "mistral"],
-    [/^COHERE_API_KEY$/, "Cohere", "cohere"],
-    [/^FIREWORKS_API_KEY$/, "Fireworks", "fireworks"],
-    [/^TOGETHER_API_KEY$/, "Together AI", "together-ai"],
-    [/^XAI_API_KEY$/, "xAI", "xai"],
-    [/^AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)$/, "Amazon Bedrock", "amazon-bedrock"],
-  ];
-  for (const [pattern, displayName, handle] of known) {
-    if (pattern.test(envName)) return { displayName, handle, authMethod: "org_key" };
+  if (envName !== "ANTHROPIC_API_KEY") {
+    throw new Error(`Unsupported credential env for Anthropic Go setup: ${envName}`);
   }
-  const base = envName
-    .replace(/_(API_KEY|TOKEN|ACCESS_KEY_ID|SECRET_ACCESS_KEY)$/, "")
-    .toLowerCase()
-    .split("_")
-    .filter(Boolean);
-  return {
-    displayName: base.map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ") || envName,
-    handle: base.join("-") || envName.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-    authMethod: "org_key",
-  };
+  return { displayName: "Anthropic", handle: "anthropic", authMethod: "org_key" };
 }

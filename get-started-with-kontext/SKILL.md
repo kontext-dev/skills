@@ -80,7 +80,7 @@ Run this as a long-running command:
 node <this-skill-dir>/scripts/run-local-setup.mjs
 ```
 
-Relay the printed setup URL to the user. Do not open the URL yourself. Do not use Playwright, browser-use, computer-use, `open`, or any browser automation for this step unless the user explicitly asks you to drive the browser in that same message. Do not ask the user to copy secrets. The browser page owns provider creation/selection when the user wants credential injection. Provider setup is optional: if the user chooses tracing only, the browser sends the runtime env values without a selected provider. The browser must not post to localhost.
+Relay the printed setup URL to the user. Do not open the URL yourself. Do not use Playwright, browser-use, computer-use, `open`, or any browser automation for this step unless the user explicitly asks you to drive the browser in that same message. Do not ask the user to copy secrets. The browser page owns provider creation/selection only when the supported Anthropic key path was detected. Provider setup is optional: if the user chooses tracing only, or no supported Anthropic key path was detected, the browser sends the runtime env values without a selected provider. The browser must not post to localhost.
 
 Wait until the command exits successfully. It must create:
 
@@ -103,7 +103,7 @@ The patcher owns:
 
 - adding `github.com/kontext-security/kontext-go@v0.3.0`
 - adding the env file and `.kontext-setup-state.json` to `.gitignore`
-- replacing direct Anthropic env-key usage when credential injection is enabled
+- replacing direct `ANTHROPIC_API_KEY` Anthropic SDK usage when credential injection is enabled
 - preserving existing Anthropic env-key usage when tracing-only setup is selected
 - adding `kontext.Start(...)`
 - using the exact selected provider handle when credential injection is enabled
