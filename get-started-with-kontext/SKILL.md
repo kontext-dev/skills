@@ -24,7 +24,7 @@ V1 supports macOS only.
 2. If it is not `Darwin`, stop and say:
    `Claude Code setup is macOS-only in Kontext v1.`
 3. Install or verify `kontext-cli`:
-   - If `kontext` exists in `PATH`, run `kontext --help` or `kontext version` if supported.
+   - If `kontext` exists in `PATH`, run `kontext --help` and `kontext --version`.
    - Otherwise install with the official Homebrew path:
      `brew install kontext-security/tap/kontext`
 4. Create a convenient Claude Code launcher without editing shell rc files:

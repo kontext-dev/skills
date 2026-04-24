@@ -53,6 +53,7 @@ const repoFingerprint = createHash("sha256")
   .update(`${remote}\n${repoBasename}`)
   .digest("hex")
   .slice(0, 32);
+const localHandoffClaimId = randomBytes(16).toString("base64url");
 const localHandoffToken = randomBytes(32).toString("base64url");
 const url = new URL(`${appUrl}/get-started/setup`);
 url.searchParams.set("repoFingerprint", repoFingerprint);
@@ -61,6 +62,7 @@ url.searchParams.set("gitRemoteHost", parsed.host);
 url.searchParams.set("gitRemotePath", parsed.path);
 url.searchParams.set("providerSuggestions", JSON.stringify(scanProviderSuggestions()));
 url.searchParams.set("localHandoffToken", localHandoffToken);
+url.searchParams.set("localHandoffClaimId", localHandoffClaimId);
 
 console.log("Open this setup URL in your browser:");
 console.log(url.toString());
@@ -93,7 +95,7 @@ console.log("Return to the agent. It will patch and verify the Go repo now.");
 async function waitForLocalHandoff(token) {
   const deadline = Date.now() + timeoutMs;
   const pollUrl = new URL(`${appUrl}/api/get-started/setup-sessions/local-handoff`);
-  pollUrl.searchParams.set("repoFingerprint", repoFingerprint);
+  pollUrl.searchParams.set("claimId", localHandoffClaimId);
   pollUrl.searchParams.set("token", token);
 
   while (Date.now() < deadline) {
