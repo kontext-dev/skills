@@ -1,17 +1,11 @@
 # Kontext Skills
 
-One public onboarding skill for Kontext v1.
+One public onboarding skill for Kontext v1: `get-started-with-kontext`.
 
 ## Install
 
 ```bash
 npx skills add kontext-security/skills
-```
-
-If you want a non-interactive install for all supported agents:
-
-```bash
-npx skills add kontext-security/skills --all
 ```
 
 Then tell your agent:
@@ -20,17 +14,18 @@ Then tell your agent:
 Use the Get Started with Kontext skill.
 ```
 
-## Public Skill
+## What It Sets Up
 
-### get-started-with-kontext
+The skill supports exactly two paths:
 
-Sets up exactly one of:
+| Flow | What it does |
+| --- | --- |
+| Claude Code on this machine | Verifies or installs `kontext-cli`, then starts Claude Code through Kontext. |
+| Long-running Go agent in this repo | Creates the runtime app, lets you choose a Go setup mode in the browser, then patches supported Anthropic Go SDK repos. |
 
-1. Claude Code on this machine
-2. Long-running Go agent in this repo
+For Go agents, the browser setup offers:
 
-Claude Code setup is macOS-only in v1 and uses `kontext-cli`.
-
-Long-running Go setup is for Anthropic Go SDK agents. It opens one browser setup session, creates or repairs the runtime app, lets you choose the custom provider for the agent, and patches supported Go repos with the exact selected provider handle.
-
-Runtime secrets are revealed only in the browser setup page. They are not written to the repo or echoed into the agent transcript.
+| Mode | Behavior |
+| --- | --- |
+| Inject credentials | Removes direct `ANTHROPIC_API_KEY` usage and lets Kontext provide the Anthropic credential. |
+| Trace only | Keeps the existing `ANTHROPIC_API_KEY` path and adds request/tool-call telemetry. |
